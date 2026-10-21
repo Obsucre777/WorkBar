@@ -342,12 +342,28 @@
 
   // ---------------------------------------------------------------- actions
 
+  /**
+   * Keep the invariant "only the current task is running".
+   * Returns true when any flag had to be changed (so the caller can persist it).
+   */
+  function syncRunningFlags(activeTaskId) {
+    let changed = false;
+    for (const task of plan.tasks || []) {
+      const shouldRun = !task.done && task.id === activeTaskId;
+      if (task.running !== shouldRun) {
+        task.running = shouldRun;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   function jumpTo(id) {
     const task = (plan.tasks || []).find((t) => t.id === id);
     if (!task || task.done) return;
     paused.delete(id);
     plan.current_id = id;
-    task.running = true;
+    syncRunningFlags(id);
     render(computeView());
     saveNow();
   }
@@ -357,12 +373,12 @@
     if (!view.task || view.state === "empty" || view.state === "complete") return;
     const task = view.task;
     if (task.running) {
-      task.running = false;
       paused.add(task.id);
+      syncRunningFlags(null);
     } else {
-      task.running = true;
       paused.delete(task.id);
       plan.current_id = task.id;
+      syncRunningFlags(task.id);
     }
     render(computeView());
     saveNow();
@@ -381,6 +397,7 @@
       task.running = false;
       paused.delete(task.id);
       if (plan.current_id === task.id) plan.current_id = null;
+      syncRunningFlags(null);
       el.bar.classList.remove("flash", "leaving");
       busy = false;
       render(computeView());
@@ -530,12 +547,18 @@
       const delta = Math.max(0, (nowMs - lastTickAt) / 1000);
       lastTickAt = nowMs;
 
-      const runningTask = (plan.tasks || []).find((t) => t.running && !t.done);
-      if (runningTask) {
-        runningTask.spent_sec = Math.floor(Number(runningTask.spent_sec || 0) + delta);
+      const view = computeView();
+      // only the task shown on the bar may be running
+      const runningId = view.state === "active" && view.task ? view.task.id : null;
+      const flagsChanged = syncRunningFlags(runningId);
+
+      if (runningId && view.task.running) {
+        view.task.spent_sec = Math.floor(Number(view.task.spent_sec || 0) + delta);
         maybeSave(false);
+      } else if (flagsChanged) {
+        saveNow();
       }
-      render(computeView(), false);
+      render(view, false);
     } catch (err) {
       console.error("[workbar] tick failed", err);
     }
