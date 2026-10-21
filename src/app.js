@@ -247,14 +247,6 @@
       refs.done.addEventListener("click", () => {
         if (refs.taskId) completeTask(refs.taskId);
       });
-      // clicking anywhere on the unit is only a gesture for now: press feedback
-      // (future features can hook into this click)
-      root.addEventListener("click", () => {
-        root.classList.remove("pop");
-        void root.offsetWidth;
-        root.classList.add("pop");
-        setTimeout(() => root.classList.remove("pop"), 280);
-      });
       el.units.append(root);
       unitNodes.push(refs);
     }

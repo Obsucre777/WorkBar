@@ -198,23 +198,6 @@ body {
   pointer-events: none;
 }
 
-/* subtle click feedback: the touched unit pops up a hair and eases back */
-.unit.pop {
-  animation: unit-pop 0.26s var(--ease-out);
-}
-
-@keyframes unit-pop {
-  0% {
-    transform: scale(1);
-  }
-  40% {
-    transform: scale(1.035);
-  }
-  100% {
-    transform: scale(1);
-  }
-}
-
 /* several units at once: keep everything on one row, compact each unit */
 .units.multi .unit {
   gap: 7px;
