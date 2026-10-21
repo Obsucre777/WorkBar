@@ -369,6 +369,12 @@ body {
   transform: scale(1);
 }
 
+/* never started: hovering the ring hints that clicking starts the timer */
+.ring[data-mode="idle"]:hover .ring-glyph .glyph-play {
+  opacity: 0.85;
+  transform: scale(1);
+}
+
 .ring[data-mode="running"]:hover .ring-glyph .glyph-pause {
   opacity: 0.92;
   transform: scale(1);

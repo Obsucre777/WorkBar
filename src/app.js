@@ -304,7 +304,6 @@
     const spent = Number(task.spent_sec || 0);
     const overdue = Math.max(0, Math.floor((spent - est) / 60));
     const progress = Math.min(1, Math.max(0, spent / est));
-    const idle = !isCurrent && !task.running;
     const started =
       !!task.running ||
       spent > 0 ||
@@ -312,10 +311,8 @@
     const startMin = hhmmToMin(task.start);
     const now = nowMinutes();
 
-    let mode = "idle";
-    if (isCurrent && view.state === "paused") mode = "paused";
-    else if (task.running) mode = "running";
-
+    // ring mode drives the hover glyph: running -> pause, paused -> play,
+    // idle (never started) -> play on hover
     if (!started) {
       // not started yet: only say when it starts, plus a friendlier hint as it approaches
       let status = "";
@@ -340,6 +337,7 @@
       };
     }
 
+    const mode = task.running ? "running" : "paused";
     // already timed (running or paused): elapsed / estimate, nothing else
     let status = "";
     let statusClass = "";
