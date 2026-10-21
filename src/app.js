@@ -236,19 +236,24 @@
         estimate: root.querySelector(".estimate"),
         status: root.querySelector(".status"),
         done: root.querySelector(".done"),
-        now: root.querySelector(".now"),
         taskId: null,
         titleText: "",
         key: "",
       };
+      // only the ring starts / pauses the timer
       refs.ring.addEventListener("click", () => {
         if (refs.taskId) toggleTaskPause(refs.taskId);
       });
       refs.done.addEventListener("click", () => {
         if (refs.taskId) completeTask(refs.taskId);
       });
-      refs.now.addEventListener("click", () => {
-        if (refs.taskId) jumpTo(refs.taskId);
+      // clicking anywhere on the unit is only a gesture for now: press feedback
+      // (future features can hook into this click)
+      root.addEventListener("click", () => {
+        root.classList.remove("pop");
+        void root.offsetWidth;
+        root.classList.add("pop");
+        setTimeout(() => root.classList.remove("pop"), 280);
       });
       el.units.append(root);
       unitNodes.push(refs);
@@ -256,30 +261,27 @@
     return unitNodes;
   }
 
-  /** One expanded unit per task: the current one, parallel timers, then what
-   *  comes next. Ordered by start time; at most 3 fit on the bar. */
+  /** One expanded unit per task, in stable start-time order so clicking a task
+   *  never makes it swap places with another one. The current task is always
+   *  kept visible even if it starts later than the first three. */
   function computeUnits(view) {
-    const engaged = [];
-    const upcoming = [];
+    const pending = (plan.tasks || [])
+      .filter((task) => !task.done)
+      .sort((a, b) => {
+        const sa = hhmmToMin(a.start);
+        const sb = hhmmToMin(b.start);
+        if (sa === null && sb === null) return a.id.localeCompare(b.id);
+        if (sa === null) return 1;
+        if (sb === null) return -1;
+        return sa - sb;
+      });
+    const shown = pending.slice(0, 3);
     const current = view.task;
-    if (current) engaged.push(current);
-    for (const task of plan.tasks || []) {
-      if (task.done) continue;
-      if (current && task.id === current.id) continue;
-      if (task.running) engaged.push(task);
-      else upcoming.push(task);
+    if (current && !shown.some((task) => task.id === current.id)) {
+      shown.pop();
+      shown.push(current);
     }
-    const byStart = (a, b) => {
-      const sa = hhmmToMin(a.start);
-      const sb = hhmmToMin(b.start);
-      if (sa === null && sb === null) return a.id.localeCompare(b.id);
-      if (sa === null) return 1;
-      if (sb === null) return -1;
-      return sa - sb;
-    };
-    engaged.sort(byStart);
-    upcoming.sort(byStart);
-    return engaged.concat(upcoming).slice(0, 3);
+    return shown;
   }
 
   function unitTarget(view, task, isCurrent) {
@@ -439,14 +441,16 @@
     return view;
   }
 
-  /** Collapsed strip: one line for a single running task, one coloured
-   *  segment per task (max 3, no gaps) when several timers run in parallel. */
+  /** Collapsed strip: only tasks that actually started are shown, no matter if
+   *  they are running or paused. One started task keeps the familiar single
+   *  line; several become coloured segments (max 3, colour = task identity,
+   *  brightness = running / paused). Tasks that never started are not drawn. */
   function renderSlim(view, currentProgress) {
-    const ordered = (plan.tasks || [])
-      .filter((t) => !t.done && t.running)
+    const started = (plan.tasks || [])
+      .filter((task) => !task.done && (task.running || Number(task.spent_sec) > 0))
       .map((task) => ({ task, start: hhmmToMin(task.start) }))
       .sort((a, b) => {
-        if (a.start === null && b.start === null) return 0;
+        if (a.start === null && b.start === null) return a.task.id.localeCompare(b.task.id);
         if (a.start === null) return 1;
         if (b.start === null) return -1;
         return a.start - b.start;
@@ -454,26 +458,34 @@
       .map((entry) => entry.task)
       .slice(0, 3);
 
-    const multi = ordered.length > 1;
-    el.slimBar.hidden = multi;
+    const multi = started.length > 1;
+    el.slimBar.hidden = multi || started.length === 0;
     el.slimLine.hidden = !multi;
+
+    if (started.length === 0) {
+      slimSignature = "";
+      el.slimLine.replaceChildren();
+      el.slimBar.style.setProperty("--p", "0");
+      return;
+    }
 
     if (!multi) {
       slimSignature = "";
       el.slimLine.replaceChildren();
-      const active = ordered[0];
-      const p = active
-        ? Math.min(1, Math.max(0, Number(active.spent_sec || 0) / Math.max(1, Number(active.est_min || 25) * 60)))
-        : Math.min(1, Math.max(0, currentProgress));
+      const task = started[0];
+      const p = Math.min(
+        1,
+        Math.max(0, Number(task.spent_sec || 0) / Math.max(1, Number(task.est_min || 25) * 60))
+      );
       el.slimBar.style.setProperty("--p", String(p));
       return;
     }
 
-    const signature = ordered.map((t) => t.id).join("|");
+    const signature = started.map((task) => task.id).join("|");
     if (signature !== slimSignature) {
       slimSignature = signature;
       el.slimLine.replaceChildren();
-      ordered.forEach((task, index) => {
+      started.forEach((task, index) => {
         const seg = document.createElement("i");
         seg.className = `slim-seg seg-${index}`;
         seg.dataset.id = task.id;
@@ -483,12 +495,13 @@
 
     const currentId = view.task ? view.task.id : null;
     Array.from(el.slimLine.children).forEach((seg) => {
-      const task = ordered.find((t) => t.id === seg.dataset.id);
+      const task = started.find((t) => t.id === seg.dataset.id);
       if (!task) return;
       const est = Math.max(1, Number(task.est_min || 25) * 60);
       const p = Math.min(1, Math.max(0, Number(task.spent_sec || 0) / est));
       seg.style.setProperty("--p", String(p));
       seg.classList.toggle("current", task.id === currentId);
+      seg.dataset.state = task.running ? "running" : "paused";
     });
   }
 
@@ -522,24 +535,6 @@
   }
 
   // ---------------------------------------------------------------- actions
-
-  /** Switching what the bar shows pauses the previous current task, so a
-   *  forgotten timer cannot keep accumulating in the background. Other tasks
-   *  the user (or the AI) explicitly started keep running. */
-  function jumpTo(id) {
-    const task = (plan.tasks || []).find((t) => t.id === id);
-    if (!task || task.done) return;
-    const previous = computeView().task;
-    if (previous && previous.id === id && task.running) return;
-    if (previous && previous.id !== id) {
-      previous.running = false;
-    }
-    paused.delete(id);
-    plan.current_id = id;
-    task.running = true;
-    render(computeView());
-    saveNow();
-  }
 
   function toggleTaskPause(id) {
     const view = computeView();

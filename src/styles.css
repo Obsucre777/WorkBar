@@ -144,7 +144,6 @@ body {
 
 .unit .now {
   max-width: 210px;
-  cursor: pointer;
 }
 
 .unit .ring,
@@ -199,8 +198,21 @@ body {
   pointer-events: none;
 }
 
-.unit.idle .now {
-  cursor: default;
+/* subtle click feedback: the touched unit pops up a hair and eases back */
+.unit.pop {
+  animation: unit-pop 0.26s var(--ease-out);
+}
+
+@keyframes unit-pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.035);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 /* several units at once: keep everything on one row, compact each unit */
@@ -648,6 +660,15 @@ body {
 
 .slim-seg.current {
   opacity: 1;
+}
+
+/* brightness encodes state; colour still identifies the task */
+.slim-seg[data-state="paused"] {
+  opacity: 0.4;
+}
+
+.slim-seg[data-state="paused"].current {
+  opacity: 0.55;
 }
 
 .slim-seg.seg-0 {
