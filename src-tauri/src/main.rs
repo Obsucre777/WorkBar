@@ -207,6 +207,19 @@ fn spawn_plan_watcher(app: AppHandle) {
     });
 }
 
+/// Drive the renderer clock from native code.
+///
+/// Chromium throttles JS timers when it considers the window occluded/backgrounded;
+/// on a transparent always-on-top overlay that made the on-screen timer freeze for
+/// a moment and then jump. A native tick keeps the UI updating independently of
+/// JS timer scheduling.
+fn spawn_clock(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(1000));
+        let _ = app.emit("clock-tick", ());
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Commands used by the web UI
 // ---------------------------------------------------------------------------
@@ -407,6 +420,8 @@ fn main() {
             }
             spawn_plan_watcher(app.handle().clone());
             eprintln!("[workbar] setup: watcher ok");
+            spawn_clock(app.handle().clone());
+            eprintln!("[workbar] setup: clock ok");
             Ok(())
         })
         .on_window_event(|window, event| {

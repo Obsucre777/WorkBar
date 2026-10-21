@@ -25,7 +25,8 @@
         "skipTaskbar": true,
         "focus": false,
         "shadow": false,
-        "visible": false
+        "visible": false,
+        "additionalBrowserArgs": "--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-features=CalculateNativeWinOcclusion"
       }
     ],
     "security": {

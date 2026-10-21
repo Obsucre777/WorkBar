@@ -572,8 +572,13 @@
     el.collapse.addEventListener("click", collapse);
     el.slim.addEventListener("click", expand);
     document.addEventListener("contextmenu", (event) => event.preventDefault());
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) tick();
+    });
 
     if (listen) {
+      // native 1s tick: keeps the clock moving even when Chromium throttles JS timers
+      listen("clock-tick", () => tick());
       listen("plan-changed", () => externalChange());
       listen("bar-shown", () => {
         if (collapsed) expand();
