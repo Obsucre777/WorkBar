@@ -304,23 +304,12 @@
     else if (view.state === "paused") lineState = "paused";
     el.stage.dataset.lineState = lineState;
     el.slimBar.style.setProperty("--p", String(Math.min(1, Math.max(0, progress))));
-    sendLineZone(progress);
 
     // done button availability is handled by [data-state] css
     return view;
   }
 
   // ------------------------------------------------------------------ save
-
-  let lastZoneFraction = -1;
-
-  /** Tell the Rust side where the clickable zone of the collapsed line is. */
-  function sendLineZone(fraction) {
-    const rounded = Math.round(Math.min(1, Math.max(0, fraction)) * 100) / 100;
-    if (rounded === lastZoneFraction) return;
-    lastZoneFraction = rounded;
-    if (invoke) invoke("set_line_zone", { fraction: rounded }).catch(() => {});
-  }
 
   function serialize() {
     return JSON.stringify(plan);

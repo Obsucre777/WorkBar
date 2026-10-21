@@ -6,7 +6,6 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
@@ -18,15 +17,13 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const BAR_WIDTH: f64 = 900.0;
 const BAR_HEIGHT: f64 = 76.0;
-const LINE_HEIGHT: f64 = 14.0;
+/// The collapsed window is exactly as tall as the line itself: no transparent
+/// margin left over, because a layered/transparent WebView2 window would render
+/// that leftover strip as a black band on some machines.
+const LINE_HEIGHT: f64 = 4.0;
 const TOP_GAP: f64 = 6.0;
 const HOTKEY: &str = "Ctrl+Alt+W";
 const INSTANCE_MUTEX: &str = "Local\\io.workbar.desktop.single";
-
-/// Bar mode, shared with the click-through poller.
-static COLLAPSED: AtomicBool = AtomicBool::new(false);
-/// Progress of the current task, 0..=1000, shared with the click-through poller.
-static LINE_FRACTION: AtomicU32 = AtomicU32::new(0);
 
 /// Write panics (with backtrace) to `%APPDATA%\Workbar\crash.log`.
 fn install_panic_logger() {
@@ -132,9 +129,9 @@ fn place(window: &WebviewWindow, collapsed: bool) {
     let screen = monitor.size();
     let origin = monitor.position();
 
-    // Collapsed: a full-width, 14px-tall strip flush with the top edge of the screen.
+    // Collapsed: a full-width line flush with the top edge of the screen.
     if collapsed {
-        let height = (LINE_HEIGHT * scale).round().max(LINE_HEIGHT) as u32;
+        let height = (LINE_HEIGHT * scale).round().max(2.0) as u32;
         let _ = window.set_size(PhysicalSize::new(screen.width, height));
         let _ = window.set_position(PhysicalPosition::new(origin.x, origin.y));
         return;
@@ -184,72 +181,11 @@ fn toggle_bar(app: &AppHandle) {
         let _ = window.hide();
     } else {
         // Showing always expands the bar, even if it was collapsed before hiding.
-        COLLAPSED.store(false, Ordering::Relaxed);
-        let _ = window.set_ignore_cursor_events(false);
         place(&window, false);
         let _ = window.show();
         let _ = window.set_always_on_top(true);
         let _ = app.emit("mode-changed", false);
     }
-}
-
-#[cfg(windows)]
-fn cursor_position() -> Option<(i32, i32)> {
-    use windows::Win32::Foundation::POINT;
-    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-
-    let mut point = POINT::default();
-    unsafe { GetCursorPos(&mut point).ok()? };
-    Some((point.x, point.y))
-}
-
-/// While collapsed the window is click-through everywhere except on the visible
-/// line, so the 14px strip at the top edge never swallows clicks meant for the
-/// window below it. Hovering the line turns interaction back on so it can be
-/// clicked to expand.
-fn spawn_clickthrough(app: AppHandle) {
-    std::thread::spawn(move || {
-        let mut ignoring = false;
-        loop {
-            std::thread::sleep(Duration::from_millis(40));
-            let Some(window) = app.get_webview_window("main") else {
-                continue;
-            };
-            if !window.is_visible().unwrap_or(false) {
-                continue;
-            }
-            if !COLLAPSED.load(Ordering::Relaxed) {
-                if ignoring {
-                    ignoring = false;
-                    let _ = window.set_ignore_cursor_events(false);
-                }
-                continue;
-            }
-
-            let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
-                continue;
-            };
-            let scale = window.scale_factor().unwrap_or(1.0);
-            let Some((cursor_x, cursor_y)) = cursor_position() else {
-                continue;
-            };
-
-            let fraction = LINE_FRACTION.load(Ordering::Relaxed) as f64 / 1000.0;
-            let center_x = position.x as f64 + size.width as f64 / 2.0;
-            let line_width = size.width as f64 * (1.0 - fraction);
-            let zone_width = line_width.max(160.0 * scale);
-            let inside = (cursor_x as f64) >= center_x - zone_width / 2.0
-                && (cursor_x as f64) <= center_x + zone_width / 2.0
-                && (cursor_y as f64) >= position.y as f64 - 4.0
-                && (cursor_y as f64) <= position.y as f64 + 8.0;
-
-            let desired_ignore = !inside;
-            if desired_ignore != ignoring {
-                ignoring = desired_ignore;
-                let _ = window.set_ignore_cursor_events(ignoring);
-            }
-        }
-    });
 }
 
 fn spawn_plan_watcher(app: AppHandle) {
@@ -283,21 +219,16 @@ fn save_plan(plan: workbar_core::Plan) -> Result<(), String> {
 
 #[tauri::command]
 fn set_collapsed(window: WebviewWindow, collapsed: bool) -> Result<(), String> {
-    COLLAPSED.store(collapsed, Ordering::Relaxed);
-    let _ = window.set_ignore_cursor_events(collapsed);
     // Resize while hidden: avoids the clipped/stale frames you get when a
     // transparent window is resized mid-animation.
     window.hide().map_err(|e| e.to_string())?;
     place(&window, collapsed);
+    // Re-assert a fully transparent backdrop after the resize, otherwise some
+    // WebView2 versions paint the resized surface with an opaque black band.
+    let _ = window.set_background_color(Some(tauri::utils::config::Color(0, 0, 0, 0)));
     window.show().map_err(|e| e.to_string())?;
     let _ = window.set_always_on_top(true);
     Ok(())
-}
-
-#[tauri::command]
-fn set_line_zone(fraction: f64) {
-    let clamped = fraction.clamp(0.0, 1.0);
-    LINE_FRACTION.store((clamped * 1000.0).round() as u32, Ordering::Relaxed);
 }
 
 #[tauri::command]
@@ -434,7 +365,6 @@ fn main() {
             get_plan,
             save_plan,
             set_collapsed,
-            set_line_zone,
             hide_bar,
             quit_app,
             open_data_dir,
@@ -447,6 +377,7 @@ fn main() {
                 .expect("main window should exist");
             eprintln!("[workbar] setup: window ok");
             place(&window, false);
+            let _ = window.set_background_color(Some(tauri::utils::config::Color(0, 0, 0, 0)));
             eprintln!("[workbar] setup: placed");
             #[cfg(windows)]
             make_non_activating(&window);
@@ -472,9 +403,6 @@ fn main() {
             }
             spawn_plan_watcher(app.handle().clone());
             eprintln!("[workbar] setup: watcher ok");
-            #[cfg(windows)]
-            spawn_clickthrough(app.handle().clone());
-            eprintln!("[workbar] setup: clickthrough ok");
             Ok(())
         })
         .on_window_event(|window, event| {
