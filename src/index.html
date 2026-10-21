@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" />
+    <title>Workbar</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="stage" class="stage">
+      <!-- collapsed state: a thin glowing line -->
+      <button id="slim" class="slim" type="button" title="展开 Workbar">
+        <span class="slim-line"></span>
+        <span class="slim-label">WORKBAR</span>
+      </button>
+
+      <section id="bar" class="bar" data-state="active" aria-label="Workbar">
+        <!-- 现在这一项 -->
+        <button id="ring" class="ring" type="button" title="暂停 / 继续计时" aria-label="暂停或继续计时">
+          <svg class="ring-svg" viewBox="0 0 44 44" aria-hidden="true">
+            <defs>
+              <linearGradient id="ringGradient" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#8FA2FF" />
+                <stop offset="100%" stop-color="#C79BFF" />
+              </linearGradient>
+            </defs>
+            <circle class="ring-track" cx="22" cy="22" r="18" />
+            <circle id="ringFill" class="ring-fill" cx="22" cy="22" r="18" />
+          </svg>
+          <span class="ring-glyph" aria-hidden="true">
+            <svg viewBox="0 0 12 14" class="glyph-play"><path d="M1.6 1.2 10.4 7 1.6 12.8Z" /></svg>
+            <svg viewBox="0 0 12 14" class="glyph-pause"><path d="M2 1.5h2.6v11H2zM7.4 1.5H10v11H7.4z" /></svg>
+          </span>
+        </button>
+
+        <div class="now">
+          <div class="now-head">
+            <h1 id="title" class="title">今天还没有计划</h1>
+            <span id="pulse" class="pulse" aria-hidden="true"></span>
+          </div>
+          <div class="now-sub">
+            <span id="elapsed" class="elapsed">--:--</span>
+            <span class="slash">/</span>
+            <span id="estimate" class="estimate">--</span>
+            <span id="status" class="status"></span>
+          </div>
+        </div>
+
+        <button id="done" class="done" type="button" title="完成这一项" aria-label="完成当前任务">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.8 12.6 9.6 17.4 19.2 6.9" /></svg>
+        </button>
+
+        <div class="hairline" aria-hidden="true"></div>
+
+        <div id="queue" class="queue" aria-label="接下来"></div>
+
+        <div class="spacer" aria-hidden="true"></div>
+
+        <div class="tail">
+          <span id="progress" class="progress">0 / 0</span>
+          <button id="collapse" class="ghost" type="button" title="收起成一条线" aria-label="收起">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 14.5 12 8.5l6 6" /></svg>
+          </button>
+        </div>
+
+        <div id="burst" class="burst" aria-hidden="true"></div>
+      </section>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "workbar",
+  "private": true,
+  "version": "0.0.1",
+  "description": "A tiny always-on-top bar that always shows what you should be working on right now. AI-native through MCP.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icon": "tauri icon build/app-icon.png"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

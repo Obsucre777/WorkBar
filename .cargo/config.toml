@@ -1,0 +1,4 @@
+# Build with a static C runtime so the .exe needs no VC++ redistributable
+# on the target machine (one less thing to install).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

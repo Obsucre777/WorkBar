@@ -1,0 +1,12 @@
+[package]
+name = "workbar-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared plan model, validation and storage for the Workbar app and MCP server"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }

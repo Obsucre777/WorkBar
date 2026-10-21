@@ -1,0 +1,20 @@
+# build output
+/src-tauri/target/
+/target/
+/release/
+/dist/
+node_modules/
+.npm-cache/
+
+# generated
+/src-tauri/gen/schemas/
+
+# local toolchain / dev sandbox hacks (never part of the project)
+/.toolchain/
+/.devdata*/
+
+# logs / os junk
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
