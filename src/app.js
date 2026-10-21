@@ -25,6 +25,7 @@
     collapse: $("collapse"),
     slim: $("slim"),
     slimBar: $("slimBar"),
+    slimLine: $("slimLine"),
     burst: $("burst"),
   };
 
@@ -33,10 +34,11 @@
   let queueSignature = "";
   let titleCache = "";
   let lastTickAt = Date.now();
-  // Fractional seconds waiting to be written into spent_sec. Two tick drivers
-  // (JS interval + native clock) can each deliver < 1s, and flooring a single
-  // sub-second delta every time would throw the time away.
-  let secondCarry = 0;
+  // Fractional seconds waiting to be written into spent_sec, per running task.
+  // Two tick drivers (JS interval + native clock) can each deliver < 1s, and
+  // flooring a single sub-second delta every time would throw the time away.
+  const carryByTask = new Map();
+  let slimSignature = "";
   let sinceSave = 0;
   let saving = false;
   let collapsed = false;
@@ -273,7 +275,9 @@
     el.progress.textContent = `${view.doneCount} / ${view.total}`;
 
     // queue
-    const signature = view.upNext.map((t) => `${t.id}:${t.title}:${t.start || ""}`).join("|");
+    const signature = view.upNext
+      .map((t) => `${t.id}:${t.title}:${t.start || ""}:${t.running ? 1 : 0}`)
+      .join("|");
     if (signature !== queueSignature) {
       queueSignature = signature;
       el.queue.replaceChildren();
@@ -295,12 +299,22 @@
           time.textContent = item.start;
           chip.append(time);
         }
+        const run = document.createElement("span");
+        run.className = "chip-run";
+        run.textContent = "◷";
+        run.title = item.running ? "停止这项的计时" : "同时计时（后台继续跑）";
+        run.addEventListener("click", (event) => {
+          event.stopPropagation();
+          toggleTaskRunning(item.id);
+        });
+        chip.classList.toggle("running", !!item.running);
+        chip.append(run);
         chip.addEventListener("click", () => jumpTo(item.id));
         el.queue.append(chip);
       }
     }
 
-    // collapsed line: progress retracts the line from both ends to the center.
+    // collapsed line state: colours/opacity for the single-task line.
     // "none" / "complete" = no work left -> the strip stays clickable but shows nothing.
     let lineState = "active";
     if (view.state === "complete") lineState = "complete";
@@ -309,10 +323,64 @@
     else if (view.overdueMin > 0) lineState = "overdue";
     else if (view.state === "paused") lineState = "paused";
     el.stage.dataset.lineState = lineState;
-    el.slimBar.style.setProperty("--p", String(Math.min(1, Math.max(0, progress))));
+
+    renderSlim(view, progress);
 
     // done button availability is handled by [data-state] css
     return view;
+  }
+
+  /** Collapsed strip: one line for a single running task, one coloured
+   *  segment per task (max 3, no gaps) when several timers run in parallel. */
+  function renderSlim(view, currentProgress) {
+    const ordered = (plan.tasks || [])
+      .filter((t) => !t.done && t.running)
+      .map((task) => ({ task, start: hhmmToMin(task.start) }))
+      .sort((a, b) => {
+        if (a.start === null && b.start === null) return 0;
+        if (a.start === null) return 1;
+        if (b.start === null) return -1;
+        return a.start - b.start;
+      })
+      .map((entry) => entry.task)
+      .slice(0, 3);
+
+    const multi = ordered.length > 1;
+    el.slimBar.hidden = multi;
+    el.slimLine.hidden = !multi;
+
+    if (!multi) {
+      slimSignature = "";
+      el.slimLine.replaceChildren();
+      const active = ordered[0];
+      const p = active
+        ? Math.min(1, Math.max(0, Number(active.spent_sec || 0) / Math.max(1, Number(active.est_min || 25) * 60)))
+        : Math.min(1, Math.max(0, currentProgress));
+      el.slimBar.style.setProperty("--p", String(p));
+      return;
+    }
+
+    const signature = ordered.map((t) => t.id).join("|");
+    if (signature !== slimSignature) {
+      slimSignature = signature;
+      el.slimLine.replaceChildren();
+      ordered.forEach((task, index) => {
+        const seg = document.createElement("i");
+        seg.className = `slim-seg seg-${index}`;
+        seg.dataset.id = task.id;
+        el.slimLine.append(seg);
+      });
+    }
+
+    const currentId = view.task ? view.task.id : null;
+    Array.from(el.slimLine.children).forEach((seg) => {
+      const task = ordered.find((t) => t.id === seg.dataset.id);
+      if (!task) return;
+      const est = Math.max(1, Number(task.est_min || 25) * 60);
+      const p = Math.min(1, Math.max(0, Number(task.spent_sec || 0) / est));
+      seg.style.setProperty("--p", String(p));
+      seg.classList.toggle("current", task.id === currentId);
+    });
   }
 
   // ------------------------------------------------------------------ save
@@ -346,28 +414,31 @@
 
   // ---------------------------------------------------------------- actions
 
-  /**
-   * Keep the invariant "only the current task is running".
-   * Returns true when any flag had to be changed (so the caller can persist it).
-   */
-  function syncRunningFlags(activeTaskId) {
-    let changed = false;
-    for (const task of plan.tasks || []) {
-      const shouldRun = !task.done && task.id === activeTaskId;
-      if (task.running !== shouldRun) {
-        task.running = shouldRun;
-        changed = true;
-      }
-    }
-    return changed;
-  }
-
+  /** Switching what the bar shows pauses the previous current task, so a
+   *  forgotten timer cannot keep accumulating in the background. Other tasks
+   *  the user (or the AI) explicitly started keep running. */
   function jumpTo(id) {
     const task = (plan.tasks || []).find((t) => t.id === id);
     if (!task || task.done) return;
+    const previous = computeView().task;
+    if (previous && previous.id !== id) {
+      previous.running = false;
+    }
     paused.delete(id);
     plan.current_id = id;
-    syncRunningFlags(id);
+    task.running = true;
+    render(computeView());
+    saveNow();
+  }
+
+  /** Run this task's timer in parallel without changing what the bar shows. */
+  function toggleTaskRunning(id) {
+    const task = (plan.tasks || []).find((t) => t.id === id);
+    if (!task || task.done) return;
+    task.running = !task.running;
+    if (!task.running && plan.current_id === id) {
+      paused.add(id);
+    }
     render(computeView());
     saveNow();
   }
@@ -377,12 +448,12 @@
     if (!view.task || view.state === "empty" || view.state === "complete") return;
     const task = view.task;
     if (task.running) {
+      task.running = false;
       paused.add(task.id);
-      syncRunningFlags(null);
     } else {
       paused.delete(task.id);
       plan.current_id = task.id;
-      syncRunningFlags(task.id);
+      task.running = true;
     }
     render(computeView());
     saveNow();
@@ -401,7 +472,6 @@
       task.running = false;
       paused.delete(task.id);
       if (plan.current_id === task.id) plan.current_id = null;
-      syncRunningFlags(null);
       el.bar.classList.remove("flash", "leaving");
       busy = false;
       render(computeView());
@@ -552,23 +622,22 @@
       lastTickAt = nowMs;
 
       const view = computeView();
-      // only the task shown on the bar may be running
-      const runningId = view.state === "active" && view.task ? view.task.id : null;
-      const flagsChanged = syncRunningFlags(runningId);
-
-      if (runningId && view.task.running) {
-        secondCarry += delta;
-        const whole = Math.floor(secondCarry);
+      const running = (plan.tasks || []).filter((t) => !t.done && t.running);
+      let changed = false;
+      for (const task of running) {
+        const carry = (carryByTask.get(task.id) || 0) + delta;
+        const whole = Math.floor(carry);
+        carryByTask.set(task.id, carry - whole);
         if (whole > 0) {
-          secondCarry -= whole;
-          view.task.spent_sec = Math.floor(Number(view.task.spent_sec || 0)) + whole;
+          task.spent_sec = Math.floor(Number(task.spent_sec || 0)) + whole;
+          changed = true;
         }
-        maybeSave(false);
-      } else if (flagsChanged) {
-        saveNow();
-      } else {
-        secondCarry = 0;
       }
+      // forget carries of tasks that stopped running
+      for (const id of Array.from(carryByTask.keys())) {
+        if (!running.some((task) => task.id === id)) carryByTask.delete(id);
+      }
+      if (changed) maybeSave(false);
       render(view, false);
     } catch (err) {
       console.error("[workbar] tick failed", err);

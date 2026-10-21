@@ -126,7 +126,8 @@ fn initialize_result(params: &Value) -> Value {
 2. workbar_plan_day replaces the whole day — use it only when starting or fully re-planning the day.\n\
 3. workbar_add_tasks appends; workbar_update_task moves/renames one task; prefer these over re-creating the day.\n\
 4. Times are local HH:mm (24h). One task = one short piece of work; titles must be short (<= 14 Chinese chars / ~40 latin chars) because the bar is tiny; prefer 3-8 tasks per day.\n\
-5. After a write, reply with one short confirmation line. The bar updates in under a second; there is no need to echo the whole plan."
+5. After a write, reply with one short confirmation line. The bar updates in under a second; there is no need to echo the whole plan.\n\
+6. Only one task is \"current\" (what the bar shows), but several tasks may run in parallel: set running=true on another task to keep a background timer going (the collapsed line then shows one segment per running task)."
     })
 }
 
@@ -209,7 +210,7 @@ fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "workbar_update_task",
             "title": "Update a task",
-            "description": "Change one task in place: title, time window, estimate, note, or done state. Use the id from workbar_get_today.",
+            "description": "Change one task in place: title, time window, estimate, note, running state, or done state. Use the id from workbar_get_today. Set running=true to keep a second timer going in parallel without changing what the bar shows.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -219,6 +220,7 @@ fn tool_definitions() -> Vec<Value> {
                     "end": { "type": ["string", "null"], "description": "New end HH:mm, or null to clear." },
                     "est_min": { "type": "integer", "minimum": 1 },
                     "note": { "type": ["string", "null"] },
+                    "running": { "type": "boolean", "description": "Start or stop this task's timer without changing which task the bar shows." },
                     "done": { "type": "boolean" }
                 },
                 "required": ["id"],
@@ -426,6 +428,9 @@ fn tool_update_task(args: &Value) -> Value {
         }
         if let Some(value) = args.get("note") {
             task.note = optional_text(value);
+        }
+        if let Some(running) = args.get("running").and_then(Value::as_bool) {
+            task.running = running && !task.done;
         }
         if let Some(done) = args.get("done").and_then(Value::as_bool) {
             task.done = done;
