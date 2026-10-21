@@ -1,6 +1,8 @@
 ﻿# Workbar 简易安装器：复制程序、建快捷方式、并把安装目录写进用户 PATH，
 # 这样 MCP 客户端可以直接用 `workbar-mcp`，不需要任何绝对路径。
-# 由 install.cmd 调用；参数主要给测试用。
+#
+# 覆盖正在运行的 .exe 时 Windows 会锁文件，所以顺序是：
+#   结束旧进程 → 覆盖前检查占用 → 带重试地复制 → 失败时告诉用户该关哪个 AI 客户端
 param(
     [string]$Dest = (Join-Path $env:LOCALAPPDATA 'Programs\Workbar'),
     [switch]$NoShortcut,
@@ -11,31 +13,75 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $src = Split-Path -Parent $MyInvocation.MyCommand.Path
-. (Join-Path $src 'path-helpers.ps1')
-
-# Stop a running instance first, otherwise the .exe files are locked.
-Get-Process Workbar -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 600
+. (Join-Path $src 'win-helpers.ps1')
 
 Write-Host ""
 Write-Host "  Workbar 安装器" -ForegroundColor Cyan
 Write-Host "  ------------------------------------------"
 Write-Host "  安装到: $Dest"
 
-if (-not (Test-Path $Dest)) {
+$files = @('Workbar.exe', 'workbar-mcp.exe')
+foreach ($name in $files) {
+    $from = Join-Path $src $name
+    if (-not (Test-Path -LiteralPath $from)) {
+        throw "缺少文件: $from"
+    }
+}
+
+if (-not (Test-Path -LiteralPath $Dest)) {
     New-Item -ItemType Directory -Path $Dest -Force | Out-Null
 }
 
-foreach ($name in @('Workbar.exe', 'workbar-mcp.exe')) {
-    $from = Join-Path $src $name
-    if (-not (Test-Path $from)) {
-        throw "缺少文件: $from"
+# 1) 结束旧进程（Workbar 本体，以及被 AI 客户端拉起的 workbar-mcp）
+Stop-WorkbarProcesses
+
+# 2) 覆盖前确认两个目标文件都能独占打开；任何一个被占用就再清场重试一次
+$locked = @()
+foreach ($name in $files) {
+    $target = Join-Path $Dest $name
+    if (-not (Test-WorkbarFileWritable -Path $target)) { $locked += $name }
+}
+if ($locked.Count -gt 0) {
+    Stop-WorkbarProcesses
+    Start-Sleep -Milliseconds 500
+    $locked = @()
+    foreach ($name in $files) {
+        $target = Join-Path $Dest $name
+        if (-not (Test-WorkbarFileWritable -Path $target)) { $locked += $name }
     }
-    Copy-Item -Path $from -Destination (Join-Path $Dest $name) -Force
+}
+if ($locked.Count -gt 0) {
+    Write-Host "  ✗ 无法更新: $($locked -join '、') 正被其他进程占用" -ForegroundColor Red
+    $clients = Get-WorkbarClientProcesses
+    if ($clients.Count -gt 0) {
+        Write-Host "    检测到你正在运行: $($clients -join '、')" -ForegroundColor Yellow
+    }
+    Write-Host "    请完全退出这些 AI 客户端（包括托盘图标）后重新运行 install.cmd。" -ForegroundColor Yellow
+    exit 1
+}
+
+# 3) 复制（带重试：客户端可能在杀掉后立刻把 mcp 进程重新拉起来）
+foreach ($name in $files) {
+    if ($DryRun) {
+        Write-Host "  [dry-run] 将复制: $name" -ForegroundColor DarkGray
+        continue
+    }
+    try {
+        Copy-WorkbarFile -From (Join-Path $src $name) -To (Join-Path $Dest $name)
+    } catch {
+        Write-Host "  ✗ 复制失败（文件仍被占用）: $name" -ForegroundColor Red
+        $clients = Get-WorkbarClientProcesses
+        if ($clients.Count -gt 0) {
+            Write-Host "    检测到你正在运行: $($clients -join '、')" -ForegroundColor Yellow
+        }
+        Write-Host "    请完全退出这些 AI 客户端后重新运行 install.cmd。" -ForegroundColor Yellow
+        exit 1
+    }
     Write-Host "  ✓ $name" -ForegroundColor Green
 }
 
-if (-not $NoShortcut) {
+# 4) 快捷方式
+if (-not $NoShortcut -and -not $DryRun) {
     $shell = New-Object -ComObject WScript.Shell
     $targets = @(
         (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Workbar.lnk'),
@@ -56,6 +102,7 @@ if (-not $NoShortcut) {
     }
 }
 
+# 5) 用户 PATH
 if (-not $NoPath) {
     $added = Add-WorkbarToUserPath -Dir $Dest -DryRun:$DryRun
     if ($added) {

@@ -9,14 +9,14 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $src = Split-Path -Parent $MyInvocation.MyCommand.Path
-. (Join-Path $src 'path-helpers.ps1')
+. (Join-Path $src 'win-helpers.ps1')
 
 Write-Host ""
 Write-Host "  Workbar 卸载" -ForegroundColor Cyan
 Write-Host "  ------------------------------------------"
 
-Get-Process Workbar -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 400
+# 结束 Workbar 本体和 AI 客户端拉起的 workbar-mcp，否则目录删不干净。
+Stop-WorkbarProcesses
 
 foreach ($lnk in @(
     (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Workbar.lnk'),

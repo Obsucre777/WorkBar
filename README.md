@@ -128,6 +128,10 @@ MCP 解决「怎么让 AI 懂」，文件解决「怎么让任何东西都能接
 - 用 `where workbar-mcp` 验证，没有输出就重跑一次 `install.cmd`；
 - 仍然不行就改用绝对路径兜底：`%LOCALAPPDATA%\Programs\Workbar\workbar-mcp.exe`。
 
+**安装时提示 `workbar-mcp.exe 正被占用`**
+AI 客户端（Claude Code / Cursor / CodeBuddy 等）会常驻一个 `workbar-mcp.exe` 子进程。
+安装器会先自动结束它并重试；如果客户端立刻把它重新拉起，安装器会列出检测到的客户端，请完全退出对应程序后再运行一次 `install.cmd`。
+
 **重复双击快捷方式 / 看不到浮条**
 v0.0.1 包含单实例保护：已经有一个 Workbar 在跑时，再次启动只会把已有的浮条叫回来，不会崩溃。
 如果浮条被 `Ctrl+Alt+W` 或托盘隐藏了，再启动一次即可恢复。
