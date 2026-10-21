@@ -12,15 +12,8 @@
   const el = {
     stage: $("stage"),
     bar: $("bar"),
-    title: $("title"),
-    pulse: $("pulse"),
-    elapsed: $("elapsed"),
-    estimate: $("estimate"),
-    status: $("status"),
-    ring: $("ring"),
-    ringFill: $("ringFill"),
-    done: $("done"),
-    queue: $("queue"),
+    units: $("units"),
+    more: $("more"),
     progress: $("progress"),
     collapse: $("collapse"),
     slim: $("slim"),
@@ -31,14 +24,13 @@
 
   let plan = { date: "", current_id: null, tasks: [] };
   let lastSnapshot = "";
-  let queueSignature = "";
-  let titleCache = "";
   let lastTickAt = Date.now();
   // Fractional seconds waiting to be written into spent_sec, per running task.
   // Two tick drivers (JS interval + native clock) can each deliver < 1s, and
   // flooring a single sub-second delta every time would throw the time away.
   const carryByTask = new Map();
   let slimSignature = "";
+  let unitNodes = [];
   let sinceSave = 0;
   let saving = false;
   let collapsed = false;
@@ -96,6 +88,16 @@
     return "";
   }
 
+  /** Friendly "starts soon" hint: coarser buckets as the start gets closer. */
+  function startHint(remainMin) {
+    if (remainMin < 5) return "不到 5 分钟";
+    if (remainMin < 10) return "不到 10 分钟";
+    if (remainMin < 15) return "不到 15 分钟";
+    if (remainMin < 30) return "不到 30 分钟";
+    if (remainMin < 60) return "不到 1 小时";
+    return "";
+  }
+
   // ------------------------------------------------------------------ view
 
   function computeView() {
@@ -114,12 +116,11 @@
       startsIn: 0,
       doneCount: tasks.filter((t) => t.done).length,
       total: tasks.length,
-      upNext: [],
+      pendingCount: tasks.filter((t) => !t.done).length,
     };
 
     if (!fresh || tasks.length === 0) {
       view.state = "empty";
-      view.upNext = tasks.slice(0, 0);
       return view;
     }
 
@@ -177,38 +178,221 @@
     const spent = Number(current.spent_sec) || 0;
     view.overdueMin = est > 0 && spent > est ? Math.floor((spent - est) / 60) : 0;
 
-    const queue = pending
-      .filter((t) => t.id !== current.id)
-      .sort((a, b) => {
-        const sa = hhmmToMin(a.start);
-        const sb = hhmmToMin(b.start);
-        if (sa === null && sb === null) return 0;
-        if (sa === null) return 1;
-        if (sb === null) return -1;
-        return sa - sb;
-      })
-      .slice(0, 3);
-    view.upNext = queue;
     return view;
   }
 
   // ----------------------------------------------------------------- render
 
-  function animateTitle(text, immediate) {
-    if (text === titleCache) return;
-    titleCache = text;
-    if (immediate || !el.title.animate) {
-      el.title.textContent = text;
+  function animateUnitTitle(node, text, immediate) {
+    if (immediate || !node.animate) {
+      node.textContent = text;
       return;
     }
-    el.title.animate(
+    node.animate(
       [
         { opacity: 0, transform: "translateY(-6px)", filter: "blur(3px)" },
         { opacity: 1, transform: "translateY(0)", filter: "blur(0)" },
       ],
       { duration: 300, easing: "cubic-bezier(.16,1,.3,1)" }
     );
-    el.title.textContent = text;
+    node.textContent = text;
+  }
+
+  /** Build (or reuse) one "current task" unit per engaged task. */
+  function ensureUnits(count) {
+    if (unitNodes.length === count) return unitNodes;
+    el.units.replaceChildren();
+    unitNodes = [];
+    for (let index = 0; index < count; index += 1) {
+      const root = document.createElement("div");
+      root.className = `unit unit-${index}`;
+      root.innerHTML = [
+        '<button class="ring" type="button" title="暂停 / 继续计时" aria-label="暂停或继续计时">',
+        '  <svg class="ring-svg" viewBox="0 0 44 44" aria-hidden="true">',
+        '    <circle class="ring-track" cx="22" cy="22" r="18"></circle>',
+        '    <circle class="ring-fill" cx="22" cy="22" r="18"></circle>',
+        "  </svg>",
+        '  <span class="ring-glyph" aria-hidden="true">',
+        '    <svg viewBox="0 0 12 14" class="glyph-play"><path d="M1.6 1.2 10.4 7 1.6 12.8Z"></path></svg>',
+        '    <svg viewBox="0 0 12 14" class="glyph-pause"><path d="M2 1.5h2.6v11H2zM7.4 1.5H10v11H7.4z"></path></svg>',
+        "  </span>",
+        "</button>",
+        '<div class="now">',
+        '  <div class="now-head"><h1 class="title"></h1><span class="pulse" aria-hidden="true"></span></div>',
+        '  <div class="now-sub"><span class="elapsed">--:--</span><span class="slash">/</span><span class="estimate">--</span><span class="status"></span></div>',
+        "</div>",
+        '<button class="done" type="button" title="完成这一项" aria-label="完成">',
+        '  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.8 12.6 9.6 17.4 19.2 6.9"></path></svg>',
+        "</button>",
+      ].join("");
+      const refs = {
+        root,
+        ring: root.querySelector(".ring"),
+        fill: root.querySelector(".ring-fill"),
+        pulse: root.querySelector(".pulse"),
+        title: root.querySelector(".title"),
+        elapsed: root.querySelector(".elapsed"),
+        slash: root.querySelector(".slash"),
+        estimate: root.querySelector(".estimate"),
+        status: root.querySelector(".status"),
+        done: root.querySelector(".done"),
+        now: root.querySelector(".now"),
+        taskId: null,
+        titleText: "",
+        key: "",
+      };
+      refs.ring.addEventListener("click", () => {
+        if (refs.taskId) toggleTaskPause(refs.taskId);
+      });
+      refs.done.addEventListener("click", () => {
+        if (refs.taskId) completeTask(refs.taskId);
+      });
+      refs.now.addEventListener("click", () => {
+        if (refs.taskId) jumpTo(refs.taskId);
+      });
+      el.units.append(root);
+      unitNodes.push(refs);
+    }
+    return unitNodes;
+  }
+
+  /** One expanded unit per task: the current one, parallel timers, then what
+   *  comes next. Ordered by start time; at most 3 fit on the bar. */
+  function computeUnits(view) {
+    const engaged = [];
+    const upcoming = [];
+    const current = view.task;
+    if (current) engaged.push(current);
+    for (const task of plan.tasks || []) {
+      if (task.done) continue;
+      if (current && task.id === current.id) continue;
+      if (task.running) engaged.push(task);
+      else upcoming.push(task);
+    }
+    const byStart = (a, b) => {
+      const sa = hhmmToMin(a.start);
+      const sb = hhmmToMin(b.start);
+      if (sa === null && sb === null) return a.id.localeCompare(b.id);
+      if (sa === null) return 1;
+      if (sb === null) return -1;
+      return sa - sb;
+    };
+    engaged.sort(byStart);
+    upcoming.sort(byStart);
+    return engaged.concat(upcoming).slice(0, 3);
+  }
+
+  function unitTarget(view, task, isCurrent) {
+    if (!task) {
+      const complete = view.state === "complete";
+      return {
+        title: complete ? "今天的工作都完成了" : "今天还没有计划",
+        elapsed: "",
+        estimate: complete ? `完成 ${view.doneCount} 项` : "等待 AI 排计划",
+        status: complete ? "休息一下" : "用 AI 说一句就能排",
+        statusClass: "",
+        progress: complete ? 1 : 0,
+        mode: "idle",
+        pulse: false,
+        showProgress: complete,
+      };
+    }
+
+    const est = Math.max(1, Number(task.est_min || 25) * 60);
+    const spent = Number(task.spent_sec || 0);
+    const overdue = Math.max(0, Math.floor((spent - est) / 60));
+    const progress = Math.min(1, Math.max(0, spent / est));
+    const idle = !isCurrent && !task.running;
+    const started =
+      !!task.running ||
+      spent > 0 ||
+      (isCurrent && (view.state === "paused" || view.state === "active"));
+    const startMin = hhmmToMin(task.start);
+    const now = nowMinutes();
+
+    let mode = "idle";
+    if (isCurrent && view.state === "paused") mode = "paused";
+    else if (task.running) mode = "running";
+
+    if (!started) {
+      // not started yet: only say when it starts, plus a friendlier hint as it approaches
+      let status = "";
+      let statusClass = "";
+      if (startMin !== null && startMin > now) {
+        const hint = startHint(startMin - now);
+        if (hint) {
+          status = hint;
+          statusClass = "strong";
+        }
+      }
+      return {
+        title: task.title || "未命名任务",
+        elapsed: "",
+        estimate: startMin === null ? "待开始" : `${task.start} 开始`,
+        status,
+        statusClass,
+        progress: 0,
+        mode: "idle",
+        pulse: false,
+        showProgress: false,
+      };
+    }
+
+    // already timed (running or paused): elapsed / estimate, nothing else
+    let status = "";
+    let statusClass = "";
+    if (mode === "running" && overdue > 0) {
+      status = `超时 ${overdue} 分钟`;
+      statusClass = "warn";
+    }
+    return {
+      title: task.title || "未命名任务",
+      elapsed: formatClock(spent),
+      estimate: formatEstimate(task.est_min),
+      status,
+      statusClass,
+      progress,
+      mode,
+      pulse: !!task.running,
+      showProgress: progress > 0 || !!task.running,
+    };
+  }
+
+  function renderUnits(view, immediate) {
+    const list = computeUnits(view);
+    const nodes = ensureUnits(Math.max(1, list.length));
+    el.units.classList.toggle("multi", nodes.length > 1);
+    const currentId = view.task ? view.task.id : null;
+    nodes.forEach((refs, index) => {
+      const task = list[index] || null;
+      const isCurrent = !!task && task.id === currentId;
+      refs.taskId = task ? task.id : null;
+      refs.root.classList.toggle("current", isCurrent);
+      refs.root.classList.toggle("stacked", nodes.length > 1);
+      refs.root.classList.toggle("idle", !task);
+      refs.root.dataset.id = task ? task.id : "";
+      const target = unitTarget(view, task, isCurrent);
+      if (refs.titleText !== target.title) {
+        refs.titleText = target.title;
+        animateUnitTitle(refs.title, target.title, immediate);
+      }
+      const key = `${target.elapsed}|${target.estimate}|${target.status}|${target.statusClass}|${target.mode}|${target.progress.toFixed(4)}`;
+      if (refs.key !== key) {
+        refs.key = key;
+        refs.elapsed.textContent = target.elapsed;
+        refs.elapsed.hidden = !target.elapsed;
+        refs.slash.hidden = !target.elapsed;
+        refs.estimate.textContent = target.estimate;
+        refs.status.textContent = target.status;
+        refs.status.className = `status ${target.statusClass}`.trim();
+        refs.fill.style.strokeDashoffset = String(RING_LEN * (1 - target.progress));
+        refs.fill.style.opacity = target.showProgress ? "" : "0";
+        refs.ring.dataset.mode = target.mode;
+      }
+      refs.pulse.classList.toggle("on", target.pulse);
+      refs.done.disabled = !task;
+    });
+    return list;
   }
 
   function render(view, immediate) {
@@ -217,102 +401,19 @@
     bar.classList.toggle("overdue", view.state === "active" && view.overdueMin > 0);
     bar.classList.toggle("complete", view.state === "complete");
 
-    // title
-    let title = "今天还没有计划";
-    if (view.state === "complete") title = "今天的工作都完成了";
-    else if (view.task) title = view.task.title || "未命名任务";
-    animateTitle(title, immediate);
-
-    // meta
-    const task = view.task;
-    if (!task) {
-      el.elapsed.textContent = "--:--";
-      el.estimate.textContent =
-        view.state === "complete" ? `完成 ${view.doneCount} 项` : "等待 AI 排计划";
-    } else {
-      el.elapsed.textContent =
-        view.state === "upcoming" ? "—" : formatClock(task.spent_sec);
-      el.estimate.textContent =
-        view.state === "upcoming"
-          ? `${view.task.start} 开始`
-          : formatEstimate(task.est_min);
-    }
-
-    // status line
-    let status = "";
-    let statusClass = "";
-    if (view.state === "upcoming") {
-      status = `还有 ${view.startsIn} 分钟`;
-      statusClass = "strong";
-    } else if (view.state === "paused") {
-      status = "已暂停 · 点圆环继续";
-    } else if (view.state === "complete") {
-      status = "休息一下";
-    } else if (view.state === "empty") {
-      status = "用 AI 说一句就能排";
-    } else if (view.overdueMin > 0) {
-      status = `超时 ${view.overdueMin} 分钟`;
-      statusClass = "warn";
-    }
-    el.status.textContent = status;
-    el.status.className = `status ${statusClass}`.trim();
-
-    // ring
-    const estSec = Math.max(1, Number(task && task.est_min ? task.est_min : 25) * 60);
-    let progress = 0;
-    if (view.state === "complete") progress = 1;
-    else if (task) progress = Math.max(0, Math.min(1, Number(task.spent_sec || 0) / estSec));
-    el.ringFill.style.strokeDashoffset = String(RING_LEN * (1 - progress));
-
-    let mode = "idle";
-    if (view.state === "paused") mode = "paused";
-    else if (view.state === "active") mode = "running";
-    el.ring.dataset.mode = mode;
-
-    el.pulse.classList.toggle("on", view.state === "active" && view.running);
+    const shownUnits = renderUnits(view, immediate);
 
     // progress counter
     el.progress.textContent = `${view.doneCount} / ${view.total}`;
 
-    // queue
-    const signature = view.upNext
-      .map((t) => `${t.id}:${t.title}:${t.start || ""}:${t.running ? 1 : 0}`)
-      .join("|");
-    if (signature !== queueSignature) {
-      queueSignature = signature;
-      el.queue.replaceChildren();
-      for (const item of view.upNext) {
-        const chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "chip";
-        chip.dataset.id = item.id;
-        chip.title = "点一下切换到这项";
-        const dot = document.createElement("span");
-        dot.className = "dot";
-        const label = document.createElement("span");
-        label.className = "label";
-        label.textContent = item.title;
-        chip.append(dot, label);
-        if (item.start) {
-          const time = document.createElement("span");
-          time.className = "time";
-          time.textContent = item.start;
-          chip.append(time);
-        }
-        const run = document.createElement("span");
-        run.className = "chip-run";
-        run.textContent = "◷";
-        run.title = item.running ? "停止这项的计时" : "同时计时（后台继续跑）";
-        run.addEventListener("click", (event) => {
-          event.stopPropagation();
-          toggleTaskRunning(item.id);
-        });
-        chip.classList.toggle("running", !!item.running);
-        chip.append(run);
-        chip.addEventListener("click", () => jumpTo(item.id));
-        el.queue.append(chip);
-      }
-    }
+    // more pending tasks than fit on the bar: show "+N" (hover lists them)
+    const shownIds = new Set(shownUnits.map((task) => task.id));
+    const hidden = (plan.tasks || []).filter((task) => !task.done && !shownIds.has(task.id));
+    el.more.textContent = hidden.length ? `+${hidden.length}` : "";
+    el.more.hidden = hidden.length === 0;
+    el.more.title = hidden.length
+      ? `还有：${hidden.map((t) => `${t.title}${t.start ? ` ${t.start}` : ""}`).join("、")}`
+      : "";
 
     // collapsed line state: colours/opacity for the single-task line.
     // "none" / "complete" = no work left -> the strip stays clickable but shows nothing.
@@ -324,9 +425,17 @@
     else if (view.state === "paused") lineState = "paused";
     el.stage.dataset.lineState = lineState;
 
-    renderSlim(view, progress);
+    const currentProgress = view.task
+      ? Math.min(
+          1,
+          Math.max(
+            0,
+            Number(view.task.spent_sec || 0) / Math.max(1, Number(view.task.est_min || 25) * 60)
+          )
+        )
+      : 0;
+    renderSlim(view, currentProgress);
 
-    // done button availability is handled by [data-state] css
     return view;
   }
 
@@ -421,6 +530,7 @@
     const task = (plan.tasks || []).find((t) => t.id === id);
     if (!task || task.done) return;
     const previous = computeView().task;
+    if (previous && previous.id === id && task.running) return;
     if (previous && previous.id !== id) {
       previous.running = false;
     }
@@ -431,43 +541,34 @@
     saveNow();
   }
 
-  /** Run this task's timer in parallel without changing what the bar shows. */
-  function toggleTaskRunning(id) {
-    const task = (plan.tasks || []).find((t) => t.id === id);
-    if (!task || task.done) return;
-    task.running = !task.running;
-    if (!task.running && plan.current_id === id) {
-      paused.add(id);
-    }
-    render(computeView());
-    saveNow();
-  }
-
-  function togglePause() {
+  function toggleTaskPause(id) {
     const view = computeView();
     if (!view.task || view.state === "empty" || view.state === "complete") return;
-    const task = view.task;
+    const task = (plan.tasks || []).find((t) => t.id === id);
+    if (!task || task.done) return;
+    const isCurrent = view.task.id === id;
     if (task.running) {
       task.running = false;
-      paused.add(task.id);
+      if (isCurrent) paused.add(task.id);
     } else {
-      paused.delete(task.id);
-      plan.current_id = task.id;
       task.running = true;
+      if (isCurrent) {
+        paused.delete(task.id);
+        plan.current_id = task.id;
+      }
     }
     render(computeView());
     saveNow();
   }
 
-  function completeCurrent() {
+  function completeTask(id) {
     if (busy) return;
     const view = computeView();
-    if (!view.task || view.state !== "active" && view.state !== "paused") return;
-    const task = view.task;
+    const task = (plan.tasks || []).find((t) => t.id === id);
+    if (!task || task.done) return;
+    const isCurrent = !!view.task && view.task.id === id;
     busy = true;
-    el.bar.classList.add("flash", "leaving");
-    burst();
-    setTimeout(() => {
+    const finish = () => {
       task.done = true;
       task.running = false;
       paused.delete(task.id);
@@ -476,7 +577,14 @@
       busy = false;
       render(computeView());
       saveNow();
-    }, 250);
+    };
+    if (isCurrent) {
+      el.bar.classList.add("flash", "leaving");
+      burst();
+      setTimeout(finish, 250);
+    } else {
+      finish();
+    }
   }
 
   function burst() {
@@ -594,7 +702,6 @@
     }
     plan = fresh;
     lastSnapshot = serialize();
-    queueSignature = "";
     render(computeView(), true);
   }
 
@@ -647,8 +754,6 @@
   // ------------------------------------------------------------------- wire
 
   function wire() {
-    el.done.addEventListener("click", completeCurrent);
-    el.ring.addEventListener("click", togglePause);
     el.collapse.addEventListener("click", collapse);
     el.slim.addEventListener("click", expand);
     document.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -684,8 +789,5 @@
 
   boot().catch((err) => {
     console.error("[workbar] boot failed", err);
-    titleCache = "";
-    animateTitle("Workbar 启动失败（看控制台）", true);
-    el.estimate.textContent = String((err && err.message) || err);
   });
 })();
