@@ -296,10 +296,12 @@
       }
     }
 
-    // collapsed line: progress retracts the line from both ends to the center
+    // collapsed line: progress retracts the line from both ends to the center.
+    // "none" / "complete" = no work left -> the strip stays clickable but shows nothing.
     let lineState = "active";
     if (view.state === "complete") lineState = "complete";
-    else if (view.state === "empty" || view.state === "upcoming") lineState = "idle";
+    else if (view.state === "empty") lineState = "none";
+    else if (view.state === "upcoming") lineState = "idle";
     else if (view.overdueMin > 0) lineState = "overdue";
     else if (view.state === "paused") lineState = "paused";
     el.stage.dataset.lineState = lineState;
