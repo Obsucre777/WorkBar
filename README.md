@@ -44,25 +44,57 @@ Workbar 内置一个标准 **MCP (Model Context Protocol) server**（`workbar-mc
 | `workbar_remove_task` | 删除一项 |
 | `workbar_clear_day` | 清空重来 |
 
-### 配置示例
+### 前置：安装器已经把 `workbar-mcp` 放进 PATH
 
-安装器会把安装目录写进**用户 PATH**，所以在新的终端 / AI 客户端里直接写 `workbar-mcp` 就能连，不需要任何绝对路径。
+安装器（安装包 / `install.cmd`）会复制程序到 `%LOCALAPPDATA%\Programs\Workbar`，
+并把该目录追加到**用户 PATH**，所以下面所有配置都只写 `workbar-mcp`，不用管用户名和安装路径。
 
-> 装完请**完全重启**一次已打开的终端和 AI 客户端 —— 它们只在启动时读取 PATH。
+> ⚠️ PATH 只在进程启动时读取。装完（或刚更新过 PATH）后，**完全重启**终端和 AI 客户端。
 
-先验证 PATH 是否生效：
+验证：
 
 ```powershell
 where workbar-mcp
+# C:\Users\<you>\AppData\Local\Programs\Workbar\workbar-mcp.exe
 ```
 
-**Claude Code**：
+### Claude Code
 
 ```bash
 claude mcp add --scope user workbar -- workbar-mcp
+claude mcp list
+# workbar: workbar-mcp - ✓ Connected
 ```
 
-**Cursor / 其它 JSON 配置的客户端**（`~/.cursor/mcp.json`、`.mcp.json` 等）：
+### Codex CLI
+
+编辑 `~/.codex/config.toml`：
+
+```toml
+[mcp_servers.workbar]
+command = "workbar-mcp"
+```
+
+### DeepSeek Harness (DSH)
+
+编辑 `~/.dsh/profiles/desktop/cordis.patch.yml`，在文件末尾追加（保持同级缩进）：
+
+```yaml
+- id: mcp-workbar
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: workbar
+    transport: stdio
+    command: workbar-mcp
+```
+
+DSH 通过 `@deepseek-ai/dsh-mcp-client` 桥接插件装载 MCP server，工具以
+`mcp__workbar__<tool>` 的形式出现在模型工具列表里。
+改完后**完全退出并重新打开 DSH**（DSH 进程的 PATH 需要能看到 `workbar-mcp`）。
+
+### Cursor
+
+编辑 `~/.cursor/mcp.json`（全局）或项目里的 `.cursor/mcp.json`：
 
 ```json
 {
@@ -74,14 +106,35 @@ claude mcp add --scope user workbar -- workbar-mcp
 }
 ```
 
-**Codex**（`~/.codex/config.toml`）：
+### 其它 JSON 配置的客户端
 
-```toml
-[mcp_servers.workbar]
-command = "workbar-mcp"
+Windsurf、Cline、Continue 等同类客户端格式基本相同：
+
+```json
+{
+  "mcpServers": {
+    "workbar": {
+      "command": "workbar-mcp"
+    }
+  }
+}
 ```
 
-如果 PATH 里没有 `workbar-mcp`（例如只用绿色版 exe、没跑过 `install.cmd`），用绝对路径兜底：
+### 兜底：PATH 不可用时
+
+绿色版（没跑过 `install.cmd`）、或者客户端进程还带着旧 PATH 时，改用绝对路径：
+
+```json
+{
+  "mcpServers": {
+    "workbar": {
+      "command": "C:\\Users\\<you>\\AppData\\Local\\Programs\\Workbar\\workbar-mcp.exe"
+    }
+  }
+}
+```
+
+Claude Code 同理：
 
 ```bash
 claude mcp add --scope user workbar -- "C:\Users\<you>\AppData\Local\Programs\Workbar\workbar-mcp.exe"

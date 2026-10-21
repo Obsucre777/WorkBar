@@ -56,6 +56,15 @@ workbar-mcp.exe 是标准 MCP stdio server。安装器已经把安装目录写�
     [mcp_servers.workbar]
     command = "workbar-mcp"
 
+  DeepSeek Harness（~/.dsh/profiles/desktop/cordis.patch.yml 末尾追加，
+                     然后完全退出并重启 DSH）：
+    - id: mcp-workbar
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: workbar
+        transport: stdio
+        command: workbar-mcp
+
   兜底（PATH 没生效时）：把 workbar-mcp 换成
     C:\Users\<你>\AppData\Local\Programs\Workbar\workbar-mcp.exe
 

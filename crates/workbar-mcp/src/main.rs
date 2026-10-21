@@ -122,12 +122,11 @@ fn initialize_result(params: &Value) -> Value {
         "instructions": "Workbar is the user's always-on-top floating work bar on Windows. It shows exactly one current task with a timer ring, plus the next few tasks. The bar is the single source of truth for today's plan. \
 \n\nWhen to call tools (do it proactively, do not just print a plan in chat): whenever the user talks about today's plan, their tasks, what to do next, finishing something, moving/renaming a task, or asks for a schedule. \
 \n\nWorkflow rules:\n\
-1. Call workbar_now first when you need the current local time or the task the user is on right now.\n\
-2. Call workbar_get_today before editing so you reuse existing task ids.\n\
-3. workbar_plan_day replaces the whole day — use it only when starting or fully re-planning the day.\n\
-4. workbar_add_tasks appends; workbar_update_task moves/renames one task; prefer these over re-creating the day.\n\
-5. Times are local HH:mm (24h). One task = one short piece of work; titles must be short (<= 14 Chinese chars / ~40 latin chars) because the bar is tiny; prefer 3-8 tasks per day.\n\
-6. After a write, reply with one short confirmation line. The bar updates in under a second; there is no need to echo the whole plan."
+1. Call workbar_get_today before reading or editing so you reuse existing task ids and see which task the bar is showing.\n\
+2. workbar_plan_day replaces the whole day — use it only when starting or fully re-planning the day.\n\
+3. workbar_add_tasks appends; workbar_update_task moves/renames one task; prefer these over re-creating the day.\n\
+4. Times are local HH:mm (24h). One task = one short piece of work; titles must be short (<= 14 Chinese chars / ~40 latin chars) because the bar is tiny; prefer 3-8 tasks per day.\n\
+5. After a write, reply with one short confirmation line. The bar updates in under a second; there is no need to echo the whole plan."
     })
 }
 
