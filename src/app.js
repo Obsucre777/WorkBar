@@ -403,9 +403,14 @@
   function collapse() {
     if (collapsed) return;
     collapsed = true;
+    // hide the line right away: while the window is still tall it must not be
+    // stretched into a translucent rectangle
+    el.slim.style.display = "none";
+    el.stage.classList.remove("line-ready");
     el.stage.classList.add("collapsed");
     setTimeout(async () => {
-      el.stage.classList.remove("line-ready");
+      // the user may have toggled back (e.g. hotkey) while the fade was running
+      if (!collapsed) return;
       if (invoke) {
         try {
           await invoke("set_collapsed", { collapsed: true });
@@ -413,20 +418,27 @@
           console.warn("[workbar] collapse failed", err);
         }
       }
-      el.stage.classList.add("line-ready");
-    }, 170);
+      el.slim.style.display = "";
+      requestAnimationFrame(() => el.stage.classList.add("line-ready"));
+    }, 260);
   }
 
   function expand() {
     if (!collapsed) return;
     collapsed = false;
+    // two-stage expand: line fades out -> window grows -> capsule eases in
     el.stage.classList.remove("line-ready");
-    const finish = () => requestAnimationFrame(() => el.stage.classList.remove("collapsed"));
-    if (invoke) {
-      invoke("set_collapsed", { collapsed: false }).then(finish).catch(finish);
-    } else {
-      finish();
-    }
+    setTimeout(async () => {
+      el.slim.style.display = "none";
+      if (invoke) {
+        try {
+          await invoke("set_collapsed", { collapsed: false });
+        } catch (err) {
+          console.warn("[workbar] expand failed", err);
+        }
+      }
+      requestAnimationFrame(() => el.stage.classList.remove("collapsed"));
+    }, 170);
   }
 
   // ------------------------------------------------------------------ load
@@ -545,6 +557,7 @@
       listen("mode-changed", (event) => {
         if (event && event.payload === false) {
           collapsed = false;
+          el.slim.style.display = "none";
           el.stage.classList.remove("line-ready");
           el.stage.classList.remove("collapsed");
         }
