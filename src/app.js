@@ -33,6 +33,10 @@
   let queueSignature = "";
   let titleCache = "";
   let lastTickAt = Date.now();
+  // Fractional seconds waiting to be written into spent_sec. Two tick drivers
+  // (JS interval + native clock) can each deliver < 1s, and flooring a single
+  // sub-second delta every time would throw the time away.
+  let secondCarry = 0;
   let sinceSave = 0;
   let saving = false;
   let collapsed = false;
@@ -553,10 +557,17 @@
       const flagsChanged = syncRunningFlags(runningId);
 
       if (runningId && view.task.running) {
-        view.task.spent_sec = Math.floor(Number(view.task.spent_sec || 0) + delta);
+        secondCarry += delta;
+        const whole = Math.floor(secondCarry);
+        if (whole > 0) {
+          secondCarry -= whole;
+          view.task.spent_sec = Math.floor(Number(view.task.spent_sec || 0)) + whole;
+        }
         maybeSave(false);
       } else if (flagsChanged) {
         saveNow();
+      } else {
+        secondCarry = 0;
       }
       render(view, false);
     } catch (err) {
