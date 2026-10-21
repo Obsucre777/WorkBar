@@ -24,6 +24,7 @@
     progress: $("progress"),
     collapse: $("collapse"),
     slim: $("slim"),
+    slimBar: $("slimBar"),
     burst: $("burst"),
   };
 
@@ -295,11 +296,31 @@
       }
     }
 
+    // collapsed line: progress retracts the line from both ends to the center
+    let lineState = "active";
+    if (view.state === "complete") lineState = "complete";
+    else if (view.state === "empty" || view.state === "upcoming") lineState = "idle";
+    else if (view.overdueMin > 0) lineState = "overdue";
+    else if (view.state === "paused") lineState = "paused";
+    el.stage.dataset.lineState = lineState;
+    el.slimBar.style.setProperty("--p", String(Math.min(1, Math.max(0, progress))));
+    sendLineZone(progress);
+
     // done button availability is handled by [data-state] css
     return view;
   }
 
   // ------------------------------------------------------------------ save
+
+  let lastZoneFraction = -1;
+
+  /** Tell the Rust side where the clickable zone of the collapsed line is. */
+  function sendLineZone(fraction) {
+    const rounded = Math.round(Math.min(1, Math.max(0, fraction)) * 100) / 100;
+    if (rounded === lastZoneFraction) return;
+    lastZoneFraction = rounded;
+    if (invoke) invoke("set_line_zone", { fraction: rounded }).catch(() => {});
+  }
 
   function serialize() {
     return JSON.stringify(plan);
@@ -394,16 +415,29 @@
     if (collapsed) return;
     collapsed = true;
     el.stage.classList.add("collapsed");
-    setTimeout(() => {
-      if (invoke) invoke("set_collapsed", { collapsed: true });
-    }, 220);
+    setTimeout(async () => {
+      el.stage.classList.remove("line-ready");
+      if (invoke) {
+        try {
+          await invoke("set_collapsed", { collapsed: true });
+        } catch (err) {
+          console.warn("[workbar] collapse failed", err);
+        }
+      }
+      el.stage.classList.add("line-ready");
+    }, 170);
   }
 
   function expand() {
     if (!collapsed) return;
     collapsed = false;
-    if (invoke) invoke("set_collapsed", { collapsed: false });
-    requestAnimationFrame(() => el.stage.classList.remove("collapsed"));
+    el.stage.classList.remove("line-ready");
+    const finish = () => requestAnimationFrame(() => el.stage.classList.remove("collapsed"));
+    if (invoke) {
+      invoke("set_collapsed", { collapsed: false }).then(finish).catch(finish);
+    } else {
+      finish();
+    }
   }
 
   // ------------------------------------------------------------------ load
@@ -517,6 +551,14 @@
       listen("plan-changed", () => externalChange());
       listen("bar-shown", () => {
         if (collapsed) expand();
+      });
+      // Rust already expanded/resized the window (e.g. hotkey while collapsed)
+      listen("mode-changed", (event) => {
+        if (event && event.payload === false) {
+          collapsed = false;
+          el.stage.classList.remove("line-ready");
+          el.stage.classList.remove("collapsed");
+        }
       });
     }
   }
