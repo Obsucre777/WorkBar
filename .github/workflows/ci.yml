@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - name: Build MCP server
+        run: cargo build -p workbar-mcp
+
+      - name: MCP smoke test
+        run: node scripts/smoke-mcp.js target/debug/workbar-mcp.exe
+
+      - name: Check app crate
+        run: cargo check -p workbar
