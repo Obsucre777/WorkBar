@@ -13,8 +13,9 @@ Workbar 0.0.1 · 试用包
   - 先结束正在运行的 Workbar（方便覆盖更新）
   - 复制 Workbar.exe / workbar-mcp.exe 到 %LOCALAPPDATA%\Programs\Workbar
   - 创建桌面 + 开始菜单快捷方式
+  - 把安装目录加入【用户 PATH】（这样 MCP 客户端直接写 workbar-mcp 即可）
   - 直接启动 Workbar
-卸载：双击 uninstall.cmd
+卸载：双击 uninstall.cmd（会同时把该目录从 PATH 移除）
 
 【展开态】
 屏幕顶部（主显示器正中）一条暗色胶囊：
@@ -39,9 +40,24 @@ Workbar 0.0.1 · 试用包
 用上面的 install.cmd 即可，功能完全一样。
 
 【接 AI（MCP）】
-workbar-mcp.exe 是标准 MCP stdio server，在任意 MCP 客户端配置：
+workbar-mcp.exe 是标准 MCP stdio server。安装器已经把安装目录写进用户 PATH，
+所以只要【完全重启】一次 AI 客户端，直接用 workbar-mcp 这个命令即可：
 
-  {"mcpServers":{"workbar":{"command":"<本文件夹绝对路径>\\workbar-mcp.exe"}}}
+  先验证（新开一个终端）：
+    where workbar-mcp
+
+  Claude Code：
+    claude mcp add --scope user workbar -- workbar-mcp
+
+  Cursor / 其它 JSON 客户端：
+    {"mcpServers":{"workbar":{"command":"workbar-mcp"}}}
+
+  Codex（~/.codex/config.toml）：
+    [mcp_servers.workbar]
+    command = "workbar-mcp"
+
+  兜底（PATH 没生效时）：把 workbar-mcp 换成
+    C:\Users\<你>\AppData\Local\Programs\Workbar\workbar-mcp.exe
 
 配好后直接跟 AI 说：
   "帮我排一下今天：上午写周报，10 点修登录 bug，下午写 README，晚上运动"

@@ -1,13 +1,17 @@
-﻿# Workbar 简易安装器：不依赖 NSIS、不写临时目录。
-# 由 install.cmd 调用，可传入目标目录作为参数（测试用）。
+﻿# Workbar 简易安装器：复制程序、建快捷方式、并把安装目录写进用户 PATH，
+# 这样 MCP 客户端可以直接用 `workbar-mcp`，不需要任何绝对路径。
+# 由 install.cmd 调用；参数主要给测试用。
 param(
     [string]$Dest = (Join-Path $env:LOCALAPPDATA 'Programs\Workbar'),
     [switch]$NoShortcut,
-    [switch]$NoStart
+    [switch]$NoStart,
+    [switch]$NoPath,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
 $src = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $src 'path-helpers.ps1')
 
 # Stop a running instance first, otherwise the .exe files are locked.
 Get-Process Workbar -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -52,10 +56,19 @@ if (-not $NoShortcut) {
     }
 }
 
+if (-not $NoPath) {
+    $added = Add-WorkbarToUserPath -Dir $Dest -DryRun:$DryRun
+    if ($added) {
+        Write-Host "  · 已打开的终端 / AI 客户端需要重启一次才能读到新的 PATH" -ForegroundColor DarkGray
+    }
+}
+
 Write-Host "  ------------------------------------------"
 Write-Host "  完成。数据目录: $env:APPDATA\Workbar" -ForegroundColor Cyan
+Write-Host "  MCP 客户端现在可以这样接：" -ForegroundColor Cyan
+Write-Host "    claude mcp add --scope user workbar -- workbar-mcp" -ForegroundColor DarkGray
 Write-Host ""
 
-if (-not $NoStart) {
+if (-not $NoStart -and -not $DryRun) {
     Start-Process -FilePath (Join-Path $Dest 'Workbar.exe')
 }

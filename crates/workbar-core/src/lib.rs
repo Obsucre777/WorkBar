@@ -111,6 +111,59 @@ pub fn now_hhmm() -> String {
     chrono::Local::now().format("%H:%M").to_string()
 }
 
+/// Minutes since local midnight.
+pub fn now_minutes() -> u32 {
+    use chrono::Timelike;
+    let now = chrono::Local::now();
+    now.hour() * 60 + now.minute()
+}
+
+pub fn today_weekday() -> String {
+    use chrono::Datelike;
+    const NAMES: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+    NAMES[chrono::Local::now().weekday().num_days_from_monday() as usize].to_string()
+}
+
+/// The task the bar is currently showing: explicit selection first, then the
+/// task whose time window contains `now`, then the next upcoming one.
+pub fn current_task(plan: &Plan, now_minutes: u32) -> Option<&Task> {
+    if let Some(id) = plan.current_id.as_deref() {
+        if let Some(task) = plan.tasks.iter().find(|task| task.id == id && !task.done) {
+            return Some(task);
+        }
+    }
+    if let Some(task) = plan.tasks.iter().find(|task| {
+        if task.done {
+            return false;
+        }
+        match (
+            task.start.as_deref().and_then(parse_hhmm),
+            task.end.as_deref().and_then(parse_hhmm),
+        ) {
+            (Some(start), Some(end)) => now_minutes >= start && now_minutes < end,
+            _ => false,
+        }
+    }) {
+        return Some(task);
+    }
+    if let Some(task) = plan
+        .tasks
+        .iter()
+        .filter(|task| !task.done)
+        .filter(|task| {
+            task.start
+                .as_deref()
+                .and_then(parse_hhmm)
+                .map(|start| start > now_minutes)
+                .unwrap_or(false)
+        })
+        .min_by_key(|task| task.start.as_deref().and_then(parse_hhmm).unwrap_or(u32::MAX))
+    {
+        return Some(task);
+    }
+    plan.tasks.iter().find(|task| !task.done)
+}
+
 /// Parse `HH:mm` (or `H:mm`) into minutes since midnight.
 pub fn parse_hhmm(value: &str) -> Option<u32> {
     let (h, m) = value.trim().split_once(':')?;

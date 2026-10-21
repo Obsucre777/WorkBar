@@ -46,13 +46,29 @@ Workbar 内置一个标准 **MCP (Model Context Protocol) server**（`workbar-mc
 
 ### 配置示例
 
-**Claude Code / Cursor / 其它 JSON 配置的客户端**（`.mcp.json`、`mcp.json` 等）：
+安装器会把安装目录写进**用户 PATH**，所以在新的终端 / AI 客户端里直接写 `workbar-mcp` 就能连，不需要任何绝对路径。
+
+> 装完请**完全重启**一次已打开的终端和 AI 客户端 —— 它们只在启动时读取 PATH。
+
+先验证 PATH 是否生效：
+
+```powershell
+where workbar-mcp
+```
+
+**Claude Code**：
+
+```bash
+claude mcp add --scope user workbar -- workbar-mcp
+```
+
+**Cursor / 其它 JSON 配置的客户端**（`~/.cursor/mcp.json`、`.mcp.json` 等）：
 
 ```json
 {
   "mcpServers": {
     "workbar": {
-      "command": "C:\\Users\\<you>\\AppData\\Local\\Programs\\Workbar\\workbar-mcp.exe"
+      "command": "workbar-mcp"
     }
   }
 }
@@ -62,13 +78,13 @@ Workbar 内置一个标准 **MCP (Model Context Protocol) server**（`workbar-mc
 
 ```toml
 [mcp_servers.workbar]
-command = "C:\\Users\\<you>\\AppData\\Local\\Programs\\Workbar\\workbar-mcp.exe"
+command = "workbar-mcp"
 ```
 
-**Claude Code CLI**：
+如果 PATH 里没有 `workbar-mcp`（例如只用绿色版 exe、没跑过 `install.cmd`），用绝对路径兜底：
 
 ```bash
-claude mcp add workbar -- "C:\Users\<you>\AppData\Local\Programs\Workbar\workbar-mcp.exe"
+claude mcp add --scope user workbar -- "C:\Users\<you>\AppData\Local\Programs\Workbar\workbar-mcp.exe"
 ```
 
 配好之后直接说人话：
@@ -93,16 +109,24 @@ MCP 解决「怎么让 AI 懂」，文件解决「怎么让任何东西都能接
 ## 安装
 
 1. 到 [Releases](../../releases) 下载 `Workbar-Setup-x.y.z.exe`，双击安装（当前用户安装，无需管理员）。
-2. 托盘菜单里可以勾选「开机自启」。
-3. 首次运行是空状态——用上面的 MCP 配置让 AI 排一天，或直接编辑计划文件。
+   也可以解压 portable zip 后双击 `install.cmd`（不写临时目录，适合 NSIS 被安全软件拦的机器）。
+2. 安装器会：复制程序到 `%LOCALAPPDATA%\Programs\Workbar`、创建快捷方式、**把安装目录加入用户 PATH**。
+3. 完全重启终端 / AI 客户端后，`workbar-mcp` 即可直接使用（见上面的 MCP 配置）。
+4. 托盘菜单里可以勾选「开机自启」。
+5. 卸载（`uninstall.cmd`）会把安装目录从 PATH 里移除。
 
-不想安装？双击 `Workbar.exe` 即可（绿色版，`workbar-mcp.exe` 放在同一目录）。
+不想安装？双击 `Workbar.exe` 即可（绿色版；MCP 用绝对路径，或手动把所在目录加入 PATH）。
 
 ### 常见问题
 
 **安装包报 `Error writing temporary file. Make sure your temp folder is valid.`**
 这是 NSIS 安装器写 `%TEMP%` 失败（部分机器的安全策略 / 安全软件会拦），不是程序问题。
 下载 portable zip 解压后双击 `install.cmd`：复制到 `%LOCALAPPDATA%\Programs\Workbar` 并创建快捷方式，全程不写临时目录。
+
+**AI 客户端报找不到 `workbar-mcp` / MCP 连接失败**
+- PATH 是安装时写入的，已打开的终端和 AI 客户端要**完全重启**才会读到；
+- 用 `where workbar-mcp` 验证，没有输出就重跑一次 `install.cmd`；
+- 仍然不行就改用绝对路径兜底：`%LOCALAPPDATA%\Programs\Workbar\workbar-mcp.exe`。
 
 **重复双击快捷方式 / 看不到浮条**
 v0.0.1 包含单实例保护：已经有一个 Workbar 在跑时，再次启动只会把已有的浮条叫回来，不会崩溃。

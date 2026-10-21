@@ -1,10 +1,16 @@
-﻿# Workbar 卸载器（绿色版 / 简易安装版都适用）
+﻿# Workbar 卸载器（绿色版 / 简易安装版都适用）：删除程序、快捷方式，
+# 并把安装目录从用户 PATH 里移除（-KeepPath 可保留）。
 param(
     [string]$Dest = (Join-Path $env:LOCALAPPDATA 'Programs\Workbar'),
-    [switch]$PurgeData
+    [switch]$PurgeData,
+    [switch]$KeepPath,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Continue'
+$src = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $src 'path-helpers.ps1')
+
 Write-Host ""
 Write-Host "  Workbar 卸载" -ForegroundColor Cyan
 Write-Host "  ------------------------------------------"
@@ -22,8 +28,14 @@ foreach ($lnk in @(
     }
 }
 
+if (-not $KeepPath) {
+    Remove-WorkbarFromUserPath -Dir $Dest -DryRun:$DryRun | Out-Null
+}
+
 if (Test-Path $Dest) {
-    Remove-Item $Dest -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not $DryRun) {
+        Remove-Item $Dest -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Write-Host "  - 已删除程序目录: $Dest" -ForegroundColor Yellow
 }
 
