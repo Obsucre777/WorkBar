@@ -40,7 +40,8 @@ body {
   position: relative;
   height: 100%;
   width: 100%;
-  padding: 6px 0 0;
+  /* margins match SIDE_MARGIN / TOP_MARGIN in src-tauri/src/main.rs */
+  padding: 8px 14px 0;
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -62,8 +63,10 @@ body {
     radial-gradient(120% 180% at 6% -80%, rgba(143, 162, 255, 0.2), transparent 62%),
     radial-gradient(80% 160% at 100% 140%, rgba(199, 155, 255, 0.12), transparent 60%),
     linear-gradient(180deg, rgba(27, 27, 33, 0.94) 0%, rgba(15, 15, 19, 0.97) 100%);
+  /* shadows stay inside the window margins so they fade instead of being cut */
   box-shadow:
-    0 4px 18px rgba(0, 0, 0, 0.38),
+    0 6px 16px -8px rgba(0, 0, 0, 0.62),
+    0 2px 6px -2px rgba(0, 0, 0, 0.42),
     inset 0 1px 0 rgba(255, 255, 255, 0.05),
     inset 0 -1px 0 rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(24px) saturate(135%);
@@ -100,7 +103,7 @@ body {
 @keyframes bar-in {
   from {
     opacity: 0;
-    transform: translateY(-14px) scale(0.982);
+    transform: translateY(-8px) scale(0.982);
   }
   to {
     opacity: 1;
@@ -116,21 +119,21 @@ body {
 @keyframes flash {
   0% {
     box-shadow:
-      0 4px 18px rgba(0, 0, 0, 0.38),
-      inset 0 0 0 1px rgba(110, 231, 183, 0),
-      0 0 0 rgba(110, 231, 183, 0);
+      0 6px 16px -8px rgba(0, 0, 0, 0.62),
+      0 2px 6px -2px rgba(0, 0, 0, 0.42),
+      inset 0 0 0 1px rgba(110, 231, 183, 0);
   }
   35% {
     box-shadow:
-      0 6px 26px rgba(0, 0, 0, 0.42),
-      inset 0 0 0 1px rgba(110, 231, 183, 0.35),
-      0 0 26px rgba(110, 231, 183, 0.22);
+      0 8px 22px -8px rgba(0, 0, 0, 0.55),
+      0 0 18px rgba(110, 231, 183, 0.22),
+      inset 0 0 0 1px rgba(110, 231, 183, 0.35);
   }
   100% {
     box-shadow:
-      0 4px 18px rgba(0, 0, 0, 0.38),
-      inset 0 0 0 1px rgba(110, 231, 183, 0),
-      0 0 0 rgba(110, 231, 183, 0);
+      0 6px 16px -8px rgba(0, 0, 0, 0.62),
+      0 2px 6px -2px rgba(0, 0, 0, 0.42),
+      inset 0 0 0 1px rgba(110, 231, 183, 0);
   }
 }
 

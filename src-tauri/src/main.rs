@@ -15,13 +15,17 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-const BAR_WIDTH: f64 = 900.0;
-const BAR_HEIGHT: f64 = 76.0;
+const PILL_WIDTH: f64 = 900.0;
+const PILL_HEIGHT: f64 = 64.0;
+/// Margins around the pill inside the window, so the CSS drop shadow can fade
+/// out before it hits the window edge (otherwise it is cut into a hard black rim).
+const SIDE_MARGIN: f64 = 14.0;
+const TOP_MARGIN: f64 = 8.0;
+const BOTTOM_MARGIN: f64 = 22.0;
 /// The collapsed window is exactly as tall as the line itself: no transparent
 /// margin left over, because a layered/transparent WebView2 window would render
 /// that leftover strip as a black band on some machines.
 const LINE_HEIGHT: f64 = 4.0;
-const TOP_GAP: f64 = 6.0;
 const HOTKEY: &str = "Ctrl+Alt+W";
 const INSTANCE_MUTEX: &str = "Local\\io.workbar.desktop.single";
 
@@ -137,18 +141,18 @@ fn place(window: &WebviewWindow, collapsed: bool) {
         return;
     }
 
-    let mut width = (BAR_WIDTH * scale).round() as u32;
+    let mut width = ((PILL_WIDTH + SIDE_MARGIN * 2.0) * scale).round() as u32;
     let max_width = screen
         .width
-        .saturating_sub((160.0 * scale).round() as u32)
+        .saturating_sub((120.0 * scale).round() as u32)
         .max(420);
     if width > max_width {
         width = max_width;
     }
-    let height = (BAR_HEIGHT * scale).round() as u32;
+    let height = ((TOP_MARGIN + PILL_HEIGHT + BOTTOM_MARGIN) * scale).round() as u32;
 
     let x = origin.x + ((screen.width as i64 - width as i64) / 2) as i32;
-    let y = origin.y + (TOP_GAP * scale).round() as i32;
+    let y = origin.y;
 
     let _ = window.set_size(PhysicalSize::new(width, height));
     let _ = window.set_position(PhysicalPosition::new(x, y));
