@@ -40,8 +40,9 @@ body {
   position: relative;
   height: 100%;
   width: 100%;
-  /* margins match SIDE_MARGIN / TOP_MARGIN in src-tauri/src/main.rs */
-  padding: 8px 14px 0;
+  /* margins match SIDE_MARGIN / TOP_MARGIN in src-tauri/src/main.rs — keep them
+     small: the window swallows clicks in this transparent band */
+  padding: 3px 4px 0;
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -63,10 +64,10 @@ body {
     radial-gradient(120% 180% at 6% -80%, rgba(143, 162, 255, 0.2), transparent 62%),
     radial-gradient(80% 160% at 100% 140%, rgba(199, 155, 255, 0.12), transparent 60%),
     linear-gradient(180deg, rgba(27, 27, 33, 0.94) 0%, rgba(15, 15, 19, 0.97) 100%);
-  /* shadows stay inside the window margins so they fade instead of being cut */
+  /* a tight shadow that fits inside the small window margins */
   box-shadow:
-    0 6px 16px -8px rgba(0, 0, 0, 0.62),
-    0 2px 6px -2px rgba(0, 0, 0, 0.42),
+    0 2px 7px -3px rgba(0, 0, 0, 0.62),
+    0 1px 3px -1px rgba(0, 0, 0, 0.42),
     inset 0 1px 0 rgba(255, 255, 255, 0.05),
     inset 0 -1px 0 rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(24px) saturate(135%);
@@ -105,7 +106,7 @@ body {
 @keyframes bar-in {
   from {
     opacity: 0;
-    transform: translateY(-8px) scale(0.982);
+    transform: translateY(-3px) scale(0.982);
   }
   to {
     opacity: 1;
@@ -255,20 +256,20 @@ body {
 @keyframes flash {
   0% {
     box-shadow:
-      0 6px 16px -8px rgba(0, 0, 0, 0.62),
-      0 2px 6px -2px rgba(0, 0, 0, 0.42),
+      0 2px 7px -3px rgba(0, 0, 0, 0.62),
+      0 1px 3px -1px rgba(0, 0, 0, 0.42),
       inset 0 0 0 1px rgba(110, 231, 183, 0);
   }
   35% {
     box-shadow:
-      0 8px 22px -8px rgba(0, 0, 0, 0.55),
-      0 0 18px rgba(110, 231, 183, 0.22),
+      0 3px 9px -4px rgba(0, 0, 0, 0.55),
+      0 0 8px rgba(110, 231, 183, 0.22),
       inset 0 0 0 1px rgba(110, 231, 183, 0.35);
   }
   100% {
     box-shadow:
-      0 6px 16px -8px rgba(0, 0, 0, 0.62),
-      0 2px 6px -2px rgba(0, 0, 0, 0.42),
+      0 2px 7px -3px rgba(0, 0, 0, 0.62),
+      0 1px 3px -1px rgba(0, 0, 0, 0.42),
       inset 0 0 0 1px rgba(110, 231, 183, 0);
   }
 }
@@ -757,7 +758,7 @@ body {
 
 .stage.collapsed .bar {
   opacity: 0;
-  transform: translateY(-10px) scale(0.985);
+  transform: translateY(-3px) scale(0.985);
   pointer-events: none;
 }
 

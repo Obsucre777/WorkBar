@@ -18,10 +18,14 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 const PILL_WIDTH: f64 = 900.0;
 const PILL_HEIGHT: f64 = 64.0;
 /// Margins around the pill inside the window, so the CSS drop shadow can fade
-/// out before it hits the window edge (otherwise it is cut into a hard black rim).
-const SIDE_MARGIN: f64 = 14.0;
-const TOP_MARGIN: f64 = 8.0;
-const BOTTOM_MARGIN: f64 = 22.0;
+/// out before it hits the window edge (otherwise it is cut into a hard black
+/// rim). They are deliberately tiny: everything inside the window swallows
+/// clicks, so a large transparent margin makes the pixels around the bar
+/// unclickable for whatever is behind it. Keep these in sync with `.stage`
+/// padding in `src/styles.css`.
+const SIDE_MARGIN: f64 = 4.0;
+const TOP_MARGIN: f64 = 3.0;
+const BOTTOM_MARGIN: f64 = 6.0;
 /// The collapsed window is exactly as tall as the line itself: no transparent
 /// margin left over, because a layered/transparent WebView2 window would render
 /// that leftover strip as a black band on some machines.
