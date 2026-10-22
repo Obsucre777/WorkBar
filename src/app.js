@@ -98,6 +98,13 @@
     return "";
   }
 
+  /** "down" = countdown against est_min; "up" = open-ended stopwatch. */
+  function timerModeOf(task) {
+    if (!task) return "down";
+    if (task.timer === "up" || task.timer === "down") return task.timer;
+    return Number(task.est_min) > 0 ? "down" : "up";
+  }
+
   // ------------------------------------------------------------------ view
 
   function computeView() {
@@ -292,10 +299,14 @@
       };
     }
 
-    const est = Math.max(1, Number(task.est_min || 25) * 60);
+    const up = timerModeOf(task) === "up";
+    const est = up ? 0 : Math.max(1, Number(task.est_min || 25) * 60);
     const spent = Number(task.spent_sec || 0);
-    const overdue = Math.max(0, Math.floor((spent - est) / 60));
-    const progress = Math.min(1, Math.max(0, spent / est));
+    const overdue = up ? 0 : Math.max(0, Math.floor((spent - est) / 60));
+    // countdown: progress against the estimate; stopwatch: one ring lap per hour
+    const progress = up
+      ? (spent % 3600) / 3600
+      : Math.min(1, Math.max(0, spent / est));
     const started =
       !!task.running ||
       spent > 0 ||
@@ -333,14 +344,14 @@
     // already timed (running or paused): elapsed / estimate, nothing else
     let status = "";
     let statusClass = "";
-    if (mode === "running" && overdue > 0) {
+    if (!up && mode === "running" && overdue > 0) {
       status = `超时 ${overdue} 分钟`;
       statusClass = "warn";
     }
     return {
       title: task.title || "未命名任务",
       elapsed: formatClock(spent),
-      estimate: formatEstimate(task.est_min),
+      estimate: up ? "" : formatEstimate(task.est_min),
       status,
       statusClass,
       progress,
@@ -373,8 +384,9 @@
         refs.key = key;
         refs.elapsed.textContent = target.elapsed;
         refs.elapsed.hidden = !target.elapsed;
-        refs.slash.hidden = !target.elapsed;
         refs.estimate.textContent = target.estimate;
+        refs.estimate.hidden = !target.estimate;
+        refs.slash.hidden = !target.elapsed || !target.estimate;
         refs.status.textContent = target.status;
         refs.status.className = `status ${target.statusClass}`.trim();
         refs.fill.style.strokeDashoffset = String(RING_LEN * (1 - target.progress));
@@ -463,14 +475,22 @@
       slimSignature = "";
       el.slimLine.replaceChildren();
       const task = started[0];
-      const p = Math.min(
-        1,
-        Math.max(0, Number(task.spent_sec || 0) / Math.max(1, Number(task.est_min || 25) * 60))
-      );
-      el.slimBar.style.setProperty("--p", String(p));
+      const up = timerModeOf(task) === "up";
+      el.slimBar.classList.toggle("up", up);
+      if (up) {
+        // stopwatch: fixed-width dash whose brightness breathes while running
+        el.slimBar.style.setProperty("--p", "0.88");
+      } else {
+        const p = Math.min(
+          1,
+          Math.max(0, Number(task.spent_sec || 0) / Math.max(1, Number(task.est_min || 25) * 60))
+        );
+        el.slimBar.style.setProperty("--p", String(p));
+      }
       return;
     }
 
+    el.slimBar.classList.remove("up");
     const signature = started.map((task) => task.id).join("|");
     if (signature !== slimSignature) {
       slimSignature = signature;
@@ -487,9 +507,13 @@
     Array.from(el.slimLine.children).forEach((seg) => {
       const task = started.find((t) => t.id === seg.dataset.id);
       if (!task) return;
-      const est = Math.max(1, Number(task.est_min || 25) * 60);
-      const p = Math.min(1, Math.max(0, Number(task.spent_sec || 0) / est));
-      seg.style.setProperty("--p", String(p));
+      const up = timerModeOf(task) === "up";
+      seg.classList.toggle("up", up);
+      if (!up) {
+        const est = Math.max(1, Number(task.est_min || 25) * 60);
+        const p = Math.min(1, Math.max(0, Number(task.spent_sec || 0) / est));
+        seg.style.setProperty("--p", String(p));
+      }
       seg.classList.toggle("current", task.id === currentId);
       seg.dataset.state = task.running ? "running" : "paused";
     });
@@ -641,10 +665,12 @@
             title: String(task.title || ""),
             start: task.start || undefined,
             end: task.end || undefined,
-            est_min: Number(task.est_min) || 25,
+            est_min: Math.max(0, Math.floor(Number(task.est_min) || 0)),
+            timer: task.timer === "up" ? "up" : task.timer === "down" ? "down" : undefined,
             spent_sec: Math.max(0, Math.floor(Number(task.spent_sec) || 0)),
             running: !!task.running,
             done: !!task.done,
+            source: task.source || undefined,
             note: task.note || undefined,
           }))
         : [],

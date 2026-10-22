@@ -622,6 +622,15 @@ body {
   display: none;
 }
 
+/* stopwatch (timer = up): fixed-width dash, breathing while running */
+.slim-bar.up {
+  animation: slim-breathe 2.4s ease-in-out infinite;
+}
+
+.stage[data-line-state="paused"] .slim-bar.up {
+  animation: none;
+}
+
 /* several parallel timers: one colour per task, no gaps between segments */
 .slim-line {
   position: absolute;
@@ -658,6 +667,27 @@ body {
 
 .slim-seg[data-state="paused"].current {
   opacity: 0.55;
+}
+
+/* stopwatch (timer = up): fixed width + breathing; paused stays static and dim */
+.slim-seg.up {
+  flex: 0 0 12%;
+  transform: none;
+  animation: slim-breathe 2.4s ease-in-out infinite;
+}
+
+.slim-seg.up[data-state="paused"] {
+  animation: none;
+}
+
+@keyframes slim-breathe {
+  0%,
+  100% {
+    filter: brightness(1.12);
+  }
+  50% {
+    filter: brightness(0.5);
+  }
 }
 
 .slim-seg.seg-0 {

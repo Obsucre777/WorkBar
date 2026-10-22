@@ -94,7 +94,7 @@ function textOf(response) {
 
     const tools = await request('tools/list', {});
     const names = (tools.result && tools.result.tools ? tools.result.tools : []).map((t) => t.name);
-    check('tools/list has 8 tools', names.length === 8, names.join(','));
+    check('tools/list has 10 tools', names.length === 10, names.join(','));
 
     const plan = await request('tools/call', {
       name: 'workbar_plan_day',
@@ -141,6 +141,25 @@ function textOf(response) {
         arguments: { id: 'nope' },
       });
       check('rejects unknown id', missing.result && missing.result.isError === true);
+
+      const started = await request('tools/call', {
+        name: 'workbar_start_work',
+        arguments: { title: 'AI 冒烟工作' },
+      });
+      const startedText = textOf(started);
+      check(
+        'start_work adds a running stopwatch',
+        !started.error && startedText.includes('AI 冒烟工作') && startedText.includes('正计时')
+      );
+
+      const finished = await request('tools/call', {
+        name: 'workbar_finish_work',
+        arguments: {},
+      });
+      check(
+        'finish_work closes the session',
+        !finished.error && /\[x\][^\n]*AI 冒烟工作/.test(textOf(finished))
+      );
 
       const cleared = await request('tools/call', { name: 'workbar_clear_day', arguments: {} });
       check('clear_day', !cleared.error && textOf(cleared).includes('(no tasks yet'));

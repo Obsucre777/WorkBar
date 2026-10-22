@@ -19,6 +19,22 @@ use std::time::{Duration, SystemTime};
 pub const APP_DIR: &str = "Workbar";
 pub const DEFAULT_EST_MIN: u32 = 25;
 
+/// How a task's timer behaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TimerMode {
+    /// Countdown against `est_min` (the default for planned tasks).
+    Down,
+    /// Stopwatch with no target; the ring laps once per hour.
+    Up,
+}
+
+impl Default for TimerMode {
+    fn default() -> Self {
+        TimerMode::Down
+    }
+}
+
 /// One short piece of work shown on the bar.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -32,16 +48,34 @@ pub struct Task {
     /// Local end time, `HH:mm`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end: Option<String>,
+    /// Planned minutes. Ignored by stopwatch tasks.
     #[serde(default)]
     pub est_min: u32,
+    /// Timer mode. Omitted on old plans; use [`timer_mode`] to resolve it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timer: Option<TimerMode>,
     #[serde(default)]
     pub spent_sec: u64,
     #[serde(default)]
     pub running: bool,
     #[serde(default)]
     pub done: bool,
+    /// Who created the task (e.g. the AI client name) for work sessions made
+    /// through `workbar_start_work`; user/planner tasks leave it empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+/// Effective timer mode: an explicit `timer` wins, otherwise an estimate means
+/// countdown and a bare task (no estimate, no window) becomes a stopwatch.
+pub fn timer_mode(task: &Task) -> TimerMode {
+    task.timer.unwrap_or(if task.est_min > 0 {
+        TimerMode::Down
+    } else {
+        TimerMode::Up
+    })
 }
 
 impl Default for Task {
@@ -52,9 +86,11 @@ impl Default for Task {
             start: None,
             end: None,
             est_min: 0,
+            timer: None,
             spent_sec: 0,
             running: false,
             done: false,
+            source: None,
             note: None,
         }
     }
@@ -222,6 +258,10 @@ pub fn normalize_task(task: &mut Task) -> Result<(), String> {
     if task.id.trim().is_empty() {
         task.id = new_id();
     }
+    if let Some(source) = &task.source {
+        let trimmed = source.trim().to_string();
+        task.source = if trimmed.is_empty() { None } else { Some(trimmed) };
+    }
     for (field, value) in [("start", &task.start), ("end", &task.end)] {
         if let Some(v) = value {
             if !is_hhmm(v) {
@@ -238,7 +278,16 @@ pub fn normalize_task(task: &mut Task) -> Result<(), String> {
             }
         }
     }
-    if task.est_min == 0 {
+    // Timer mode: an explicit value wins. Otherwise a task with an estimate (or
+    // a time window) is a countdown, and a bare task is a stopwatch.
+    if task.timer.is_none() {
+        task.timer = Some(if task.est_min > 0 {
+            TimerMode::Down
+        } else {
+            TimerMode::Up
+        });
+    }
+    if timer_mode(task) == TimerMode::Down && task.est_min == 0 {
         task.est_min = DEFAULT_EST_MIN;
     }
     Ok(())
@@ -373,9 +422,14 @@ pub fn summarize(plan: &Plan) -> String {
         } else {
             String::new()
         };
+        let target = if timer_mode(task) == TimerMode::Up {
+            " 正计时".to_string()
+        } else {
+            format!(" est:{}m", task.est_min)
+        };
+        let ai = if task.source.is_some() { " (AI)" } else { "" };
         out.push_str(&format!(
-            "- [{mark}] {id}  {title}{window} est:{}m{spent}\n",
-            task.est_min,
+            "- [{mark}] {id}  {title}{window}{target}{spent}{ai}\n",
             id = task.id,
             title = task.title
         ));
@@ -388,8 +442,23 @@ pub fn summarize(plan: &Plan) -> String {
 
 /// Summary tailored for a tool result: headline + human summary + raw JSON.
 pub fn tool_result_text(plan: &Plan, message: &str) -> String {
+    // Footer reminder: models read tool results, so this is the most reliable
+    // place to repeat the work-session convention (clients may ignore
+    // `instructions`, but every client passes tool results back to the model).
+    let hint = match plan
+        .tasks
+        .iter()
+        .rev()
+        .find(|task| task.source.is_some() && !task.done)
+    {
+        Some(task) => format!(
+            "AI work session running: \"{}\" (id {}). Call workbar_finish_work when the job is done.",
+            task.title, task.id
+        ),
+        None => "Work session convention: before doing any job for the user, call workbar_start_work with a 3-8 character title; when the job is done, call workbar_finish_work.".to_string(),
+    };
     format!(
-        "{message}\n\n{}\n```json\n{}\n```",
+        "{message}\n\n{}\n\n{hint}\n```json\n{}\n```",
         summarize(plan),
         serde_json::to_string_pretty(plan).unwrap_or_else(|_| "{}".to_string())
     )

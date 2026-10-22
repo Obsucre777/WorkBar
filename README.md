@@ -35,14 +35,22 @@ Workbar 内置一个标准 **MCP (Model Context Protocol) server**（`workbar-mc
 
 | 工具 | 作用 |
 |---|---|
-| `workbar_get_today` | 读今天的计划（id、时间窗、预估、已用时） |
+| `workbar_get_today` | 读今天的计划（id、时间窗、预估、已用时、计时模式） |
+| `workbar_start_work` | AI 开始干活：在浮条上开一条**立刻计时**的正计时任务（不用先暂停） |
+| `workbar_finish_work` | AI 干活结束：停表并把这条任务标记完成 |
 | `workbar_plan_day` | 整日重排（一句话生成一天） |
-| `workbar_add_tasks` | 追加任务 |
-| `workbar_update_task` | 改标题 / 时间 / 预估 / 完成状态 |
+| `workbar_add_tasks` | 追加任务（可带 `timer: "up"` 或 `est_min` 指定正/倒计时） |
+| `workbar_update_task` | 改标题 / 时间 / 预估 / 计时模式 / 完成状态 |
 | `workbar_set_current` | 让浮条指向某一项 |
 | `workbar_complete_task` | 标记完成 |
 | `workbar_remove_task` | 删除一项 |
 | `workbar_clear_day` | 清空重来 |
+
+**AI 工作会话**：AI 接到一件活时，会先把这个活总结成 3–8 个字的标题，调
+`workbar_start_work` 在浮条上开一条**正在跑的正计时**，干完调 `workbar_finish_work`
+标记完成。是否自动发生取决于客户端：**会注入 MCP `instructions` 的客户端**（Claude Code、
+DSH 等）会自动照做；**不注入 instructions、且把 MCP 工具当「延迟工具」的客户端**
+（如 CodeBuddy）需要你在对话里明确说一句「先调 `workbar_start_work` 记一下」。
 
 ### 前置：安装器已经把 `workbar-mcp` 放进 PATH
 
@@ -105,6 +113,26 @@ DSH 通过 `@deepseek-ai/dsh-mcp-client` 桥接插件装载 MCP server，工具�
   }
 }
 ```
+
+### CodeBuddy
+
+编辑 `~/.codebuddy/mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "workbar": {
+      "command": "workbar-mcp",
+      "alwaysLoad": true
+    }
+  }
+}
+```
+
+`alwaysLoad: true` 是 CodeBuddy 自己的选项：它默认把 MCP 工具放进「延迟工具」队列
+（模型要先 ToolSearch 才能看到完整描述），并且**不注入** MCP `instructions`。
+加上它可以让 Workbar 的工具直接加载给模型。即便这样，AI 主动开正计时仍可能需要你在
+对话里说一句「先调 `workbar_start_work` 记一下」——这属于客户端行为差异，不是配置能完全解决的。
 
 ### 其它 JSON 配置的客户端
 
@@ -267,9 +295,10 @@ node scripts/smoke-mcp.js
 
 - [x] 置顶浮条 + 圆环计时 + 按时间自动切换 + 完成/暂停/跳转
 - [x] 收起为细光条、全局快捷键、托盘、开机自启
-- [x] MCP server（8 个工具）
+- [x] MCP server（10 个工具）
 - [x] 多任务同时计时：单行多任务单元（当前 / 并行计时 / 接下来），收起态分段细线
-- [ ] 正计时 / 倒计时（`timer: down/up`，无预估默认正计时）
+- [x] 正计时 / 倒计时（`timer: down/up`，无预估默认正计时；正计时圆环每小时一圈）
+- [x] AI 工作会话（AI 干活时自动在浮条开一条正计时，干完标记完成）
 - [ ] 任务来源链接（点击打开项目 / 文件 / 网页，方案待细化）
 - [ ] `workbar_now` 工具（给 AI 当前时间与当前任务上下文）
 - [ ] 内置对话面板（不依赖外部客户端也能排计划）
