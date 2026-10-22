@@ -48,9 +48,13 @@ Workbar 内置一个标准 **MCP (Model Context Protocol) server**（`workbar-mc
 
 **AI 工作会话**：AI 接到一件活时，会先把这个活总结成 3–8 个字的标题，调
 `workbar_start_work` 在浮条上开一条**正在跑的正计时**，干完调 `workbar_finish_work`
-标记完成。是否自动发生取决于客户端：**会注入 MCP `instructions` 的客户端**（Claude Code、
-DSH 等）会自动照做；**不注入 instructions、且把 MCP 工具当「延迟工具」的客户端**
-（如 CodeBuddy）需要你在对话里明确说一句「先调 `workbar_start_work` 记一下」。
+标记完成。让 AI 稳定地这么做有两条路：
+
+1. **MCP 自身**：`instructions` + 工具描述 + 每次工具返回末尾的提醒；会注入 instructions
+   的客户端（Claude Code、DSH）自动生效。
+2. **全局上下文（推荐、最稳）**：把下面[「让 AI 自动记录工作（全局上下文）」](#让-ai-自动记录工作全局上下文推荐)
+   那一节加到客户端的用户级 `AGENTS.md` / 全局记忆里，任何客户端都能触发——包括
+   CodeBuddy 这种不注入 instructions、还把工具放在延迟队列里的客户端。
 
 ### 前置：安装器已经把 `workbar-mcp` 放进 PATH
 
@@ -177,6 +181,46 @@ claude mcp add --scope user workbar -- "C:\Users\<you>\AppData\Local\Programs\Wo
 > 我现在在做第一分钟补丁，完成后帮我标记。
 >
 > 今天还有什么没做完？
+
+### 让 AI 自动记录工作（全局上下文，推荐）
+
+MCP 的 `instructions` 只有部分客户端会注入（Claude Code、DSH 会；CodeBuddy 等不会），
+所以「AI 接到任务就自动在 Workbar 上开一条正计时」这件事，**最可靠的做法是把它写进客户端的全局上下文 / 全局记忆**。
+MCP 侧的 instructions 和工具描述照旧保留，两套不冲突。
+
+不同客户端的叫法不同（`AGENTS.md`、全局 Memory、用户规则、`CODEBUDDY.md` 等）。
+最简单的做法：**把下面这段直接发给你的 AI，让它加进自己的全局上下文**：
+
+> 把 README 里「Workbar 任务记录」这一节加到你的全局上下文里（用户级 AGENTS.md / 全局记忆都行）。
+
+如果你用的客户端支持 `AGENTS.md` 约定（DSH、很多 CLI agent 都支持），手动把下面这段写进用户目录的
+`AGENTS.md`（例如 `~/.dsh/AGENTS.md`）即可：
+
+````markdown
+# Workbar 任务记录
+
+Workbar 是用户查看"AI 正在做什么"的面板，用户交给你的每件具体工作都需要在里面有一条记录。
+
+## 何时记录
+用户交给你一件具体工作时就记录，不论大小：查资料、读文件、写代码、改 bug、写文档、总结、规划、运行命令，甚至查天气这类小查询。
+不记录：寒暄、闲聊、感谢，以及你只是在向用户澄清需求。
+
+## 怎么记录
+1. 开始：在开展工作之前调用 `workbar_start_work`，可以与第一个其他工具调用同时发出。title 用用户的语言概括任务本身（不是第一步动作）：中文 3–8 个字，英文 3–5 个词；可附一行 `note`。
+2. 结束：在给出最终答复之前调用 `workbar_finish_work`。任务失败、被阻塞或中途放弃时同样要调用，并如实说明结果。
+
+## 多轮与切换
+- 任务没做完、跨多轮继续时（比如你中途向用户提问），不要重复 start。
+- 已经 finish 的任务，用户又追问或返工同一件事：用相同标题重新 start。
+- 用户换了新任务：直接 start 新的，它会自动结束上一条。
+- 不要用 `workbar_add_tasks` 记录你自己的工作。
+
+## 异常处理
+- 工具只显示名字、没有参数定义时，先加载再调用，这不算不可用。
+- 工具确实未连接或调用报错：静默跳过，不要阻塞任务，不要改用其他工具或文件替代；同一对话里失败过一次就不再尝试。
+- 不要在回复里提到 Workbar 或计时。
+- 用户在当前对话中明确说不要使用 Workbar 时，停止记录。
+````
 
 ### 为什么是 MCP + 文件，而不是内置 AI
 

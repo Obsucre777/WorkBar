@@ -107,5 +107,10 @@
   3. 每次工具返回文本末尾的 "Work session convention" / "AI work session running" 提醒（调用后必达，用于兜底）。
 - 已知客户端差异：**CodeBuddy 不注入 MCP instructions，且默认把 MCP 工具当延迟工具**（ToolSearch），所以它的模型不会主动调用；给它的 server 配置加 `"alwaysLoad": true` 可让工具直接加载，但仍可能需要用户明说一句才触发。README 已记录。
 
-**不做**：给各个 Harness 写用户规则/记忆文件（用户装完就应该能用；适配只在 Workbar 侧做）。
+**补充决定（2026-10-22）**：不再指望各客户端的 MCP instructions 都能生效。
+最终采用**用户级全局上下文**方案：README 收录一段固定的「Workbar 任务记录」文本，
+用户（或让 AI 自己）把它加到客户端的全局上下文（`AGENTS.md` / 全局记忆 / `CODEBUDDY.md` 等）。
+MCP 侧的 instructions、工具描述、返回提醒全部保留，两者不冲突。
+
+**不做**：由 Workbar 安装器去改各个 Harness 的配置文件或写用户规则；只提供可复制的上下文文本，用户自助。
 
