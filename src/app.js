@@ -610,45 +610,34 @@
     }
   }
 
+  // Trace timestamps go to trace.log via Rust; Date.now() in the message keeps
+  // the JS wall clock so IPC delivery delay stays measurable.
+  function trace(text) {
+    if (invoke) invoke("trace_js", { msg: `${Date.now()} ${text} hidden=${document.hidden}` }).catch(() => {});
+  }
+
   function collapse() {
     if (collapsed) return;
     collapsed = true;
+    trace("collapse start");
     // hide the line right away: while the window is still tall it must not be
     // stretched into a translucent rectangle
     el.slim.style.display = "none";
     el.stage.classList.remove("line-ready");
     el.stage.classList.add("collapsed");
-    setTimeout(async () => {
-      // the user may have toggled back (e.g. hotkey) while the fade was running
-      if (!collapsed) return;
-      if (invoke) {
-        try {
-          await invoke("set_collapsed", { collapsed: true });
-        } catch (err) {
-          console.warn("[workbar] collapse failed", err);
-        }
-      }
-      el.slim.style.display = "";
-      requestAnimationFrame(() => el.stage.classList.add("line-ready"));
-    }, 260);
+    // Rust waits out the CSS fade on a native thread, then resizes and emits
+    // `bar-resized`; no JS timer is on the critical path because Chromium may
+    // throttle them for seconds.
+    if (invoke) invoke("set_collapsed", { collapsed: true }).catch(err => console.warn("[workbar] collapse failed", err));
   }
 
   function expand() {
     if (!collapsed) return;
     collapsed = false;
+    trace("expand start");
     // two-stage expand: line fades out -> window grows -> capsule eases in
     el.stage.classList.remove("line-ready");
-    setTimeout(async () => {
-      el.slim.style.display = "none";
-      if (invoke) {
-        try {
-          await invoke("set_collapsed", { collapsed: false });
-        } catch (err) {
-          console.warn("[workbar] expand failed", err);
-        }
-      }
-      requestAnimationFrame(() => el.stage.classList.remove("collapsed"));
-    }, 170);
+    if (invoke) invoke("set_collapsed", { collapsed: false }).catch(err => console.warn("[workbar] expand failed", err));
   }
 
   // ------------------------------------------------------------------ load
@@ -779,7 +768,32 @@
       listen("bar-shown", () => {
         if (collapsed) expand();
       });
-      // Rust already expanded/resized the window (e.g. hotkey while collapsed)
+      // Native hotkey / tray toggle: run the same collapse()/expand() the
+      // collapse arrow uses, so the window is resized by set_collapsed only
+      // after the fade — a native resize first shows one stale expanded frame
+      // inside the 4px window, which reads as a black band flash.
+      listen("bar-toggle", (event) => {
+        if (!event || typeof event.payload !== "boolean") return;
+        trace(`recv bar-toggle ${event.payload}`);
+        if (event.payload) collapse();
+        else expand();
+      });
+      // The native applier finished the window resize: complete the animation
+      // stages that must not run while the old window shape is still up.
+      listen("bar-resized", (event) => {
+        if (!event || typeof event.payload !== "boolean") return;
+        trace(`recv bar-resized ${event.payload}`);
+        if (event.payload) {
+          if (!collapsed) return;
+          el.slim.style.display = "";
+          requestAnimationFrame(() => el.stage.classList.add("line-ready"));
+        } else {
+          if (collapsed) return;
+          el.slim.style.display = "none";
+          el.stage.classList.remove("collapsed");
+        }
+      });
+      // Rust already expanded/resized the window (recovery from hidden)
       listen("mode-changed", (event) => {
         if (event && event.payload === false) {
           collapsed = false;

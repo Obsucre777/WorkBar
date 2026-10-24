@@ -12,6 +12,7 @@ node_modules/
 # local toolchain / dev sandbox hacks (never part of the project)
 /.toolchain/
 /.devdata*/
+/.devdata-*
 
 # logs / os junk
 *.log

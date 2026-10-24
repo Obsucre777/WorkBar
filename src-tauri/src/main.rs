@@ -6,6 +6,10 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod shortcut_settings;
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
@@ -13,7 +17,7 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::ShortcutState;
 
 const PILL_WIDTH: f64 = 900.0;
 const PILL_HEIGHT: f64 = 64.0;
@@ -30,8 +34,17 @@ const BOTTOM_MARGIN: f64 = 6.0;
 /// margin left over, because a layered/transparent WebView2 window would render
 /// that leftover strip as a black band on some machines.
 const LINE_HEIGHT: f64 = 4.0;
-const HOTKEY: &str = "Ctrl+Alt+W";
 const INSTANCE_MUTEX: &str = "Local\\io.workbar.desktop.single";
+
+/// Mirror of the bar's collapsed state. The web UI and native toggles (hotkey,
+/// tray) can both change it, so the current value must live where both reach it.
+/// `applied` is the state the window has actually been resized to; `operation`
+/// serializes the delayed appliers so the latest request always wins.
+struct BarState {
+    collapsed: AtomicBool,
+    applied: AtomicBool,
+    operation: Mutex<()>,
+}
 
 /// Write panics (with backtrace) to `%APPDATA%\Workbar\crash.log`.
 fn install_panic_logger() {
@@ -92,6 +105,52 @@ fn log_boot(message: &str) {
     }
 }
 
+/// Millisecond-resolution hop tracing for the hotkey -> event -> JS -> resize
+/// chain, written to `trace.log`. Toggling the bar is rare, so the file stays
+/// tiny; it exists to diagnose occasional multi-second delays.
+fn trace(message: &str) {
+    use std::io::Write;
+    let dir = workbar_core::data_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("trace.log"))
+    {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let _ = writeln!(file, "[{ms}] {message}");
+    }
+}
+
+/// Priority class plus EcoQoS state: a never-activated toolwindow process may be
+/// power-throttled by the OS, which starves the hotkey/event handling under load.
+#[cfg(windows)]
+fn process_power_state() -> String {
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, GetPriorityClass, GetProcessInformation, ProcessPowerThrottling,
+        PROCESS_POWER_THROTTLING_STATE,
+    };
+    unsafe {
+        let priority = GetPriorityClass(GetCurrentProcess());
+        let mut state = PROCESS_POWER_THROTTLING_STATE {
+            Version: 0,
+            ControlMask: 0,
+            StateMask: 0,
+        };
+        let query = GetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            &mut state as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        );
+        let eco = query.is_ok() && (state.StateMask & 0x1) != 0;
+        format!("priority={priority:?} eco_qos={eco}")
+    }
+}
+
 /// Detect a second instance *before* Tauri/WebView2 starts.
 ///
 /// Creating a second WebView2 environment against a user data folder that the
@@ -128,21 +187,20 @@ fn second_instance_exit() -> bool {
     true
 }
 
-/// Horizontal pill centered at the top of the primary monitor.
-fn place(window: &WebviewWindow, collapsed: bool) {
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let Some(monitor) = window.primary_monitor().ok().flatten() else {
-        return;
-    };
+/// Compute the window geometry (size + position) for a bar state.
+fn bar_geometry(
+    window: &WebviewWindow,
+    collapsed: bool,
+) -> Option<(PhysicalSize<u32>, PhysicalPosition<i32>)> {
+    let scale = window.scale_factor().ok()?;
+    let monitor = window.primary_monitor().ok().flatten()?;
     let screen = monitor.size();
     let origin = monitor.position();
 
     // Collapsed: a full-width line flush with the top edge of the screen.
     if collapsed {
         let height = (LINE_HEIGHT * scale).round().max(2.0) as u32;
-        let _ = window.set_size(PhysicalSize::new(screen.width, height));
-        let _ = window.set_position(PhysicalPosition::new(origin.x, origin.y));
-        return;
+        return Some((PhysicalSize::new(screen.width, height), PhysicalPosition::new(origin.x, origin.y)));
     }
 
     let mut width = ((PILL_WIDTH + SIDE_MARGIN * 2.0) * scale).round() as u32;
@@ -154,12 +212,16 @@ fn place(window: &WebviewWindow, collapsed: bool) {
         width = max_width;
     }
     let height = ((TOP_MARGIN + PILL_HEIGHT + BOTTOM_MARGIN) * scale).round() as u32;
-
     let x = origin.x + ((screen.width as i64 - width as i64) / 2) as i32;
-    let y = origin.y;
+    Some((PhysicalSize::new(width, height), PhysicalPosition::new(x, origin.y)))
+}
 
-    let _ = window.set_size(PhysicalSize::new(width, height));
-    let _ = window.set_position(PhysicalPosition::new(x, y));
+/// Horizontal pill centered at the top of the primary monitor.
+fn place(window: &WebviewWindow, collapsed: bool) {
+    if let Some((size, position)) = bar_geometry(window, collapsed) {
+        let _ = window.set_size(size);
+        let _ = window.set_position(position);
+    }
 }
 
 /// Keep the bar clickable but never focusable, and out of Alt-Tab.
@@ -181,19 +243,96 @@ fn make_non_activating(window: &WebviewWindow) {
     }
 }
 
+/// Apply the current desired bar state to the window after the CSS fade grace
+/// period. Runs on a plain native thread on purpose: Chromium throttles JS
+/// timers, animation frames and IPC delivery in states the anti-throttle
+/// browser flags do not fully cover, which used to stall the switch for
+/// seconds. Sleeping here keeps the actual resize off that path entirely.
+fn apply_bar_state_later(app: AppHandle, requested: bool) {
+    std::thread::spawn(move || {
+        let state = app.state::<BarState>();
+        let _guard = state.operation.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Give the web UI's fade-out animation the time the CSS needs, so the
+        // resize lands on a page that already renders the target state.
+        std::thread::sleep(Duration::from_millis(if requested { 300 } else { 180 }));
+        // Re-read after the wait: a rapid second toggle must win.
+        let desired = state.collapsed.load(Ordering::SeqCst);
+        if state.applied.load(Ordering::SeqCst) == desired {
+            // Window is already in the desired shape (a rapid double toggle
+            // cancelled mid-flight), but the web UI may still be mid-animation
+            // waiting for the completion signal — send it anyway so its
+            // visuals converge; the handler ignores mismatched directions.
+            let _ = app.emit("bar-resized", desired);
+            return;
+        }
+        let Some(window) = app.get_webview_window("main") else { return; };
+        trace(&format!("apply {desired} start"));
+        if let Some((size, position)) = bar_geometry(&window, desired) {
+            // Park the window off-screen for the resize. Resizing a visible
+            // transparent WebView2 window paints a black band for a few
+            // frames, while hiding the HWND makes WebView2 suspend the
+            // renderer and stall the toggle for seconds (traced in
+            // trace.log). Off-screen the window stays "visible" to WebView2,
+            // so neither happens: the band renders outside the monitor and
+            // the renderer never suspends.
+            let _ = window.set_position(PhysicalPosition::new(-32000, -32000));
+            let _ = window.set_size(size);
+            // Re-assert a fully transparent backdrop after the resize,
+            // otherwise some WebView2 versions keep the opaque band.
+            let _ = window.set_background_color(Some(tauri::utils::config::Color(0, 0, 0, 0)));
+            // Give WebView2 a moment to repaint at the new size while the
+            // band frames land off-screen, then return to the final spot.
+            std::thread::sleep(Duration::from_millis(60));
+            let _ = window.set_position(position);
+        }
+        let _ = window.set_always_on_top(true);
+        state.applied.store(desired, Ordering::SeqCst);
+        trace(&format!("apply {desired} done"));
+        // The web UI finishes its animation stages on this signal instead of
+        // its own timers (showing the line / revealing the capsule).
+        let _ = app.emit("bar-resized", desired);
+    });
+}
+
+/// Apply a collapsed/expanded window state immediately and tell the web UI to match.
+fn set_bar_state(app: &AppHandle, window: &WebviewWindow, collapsed: bool) {
+    let state = app.state::<BarState>();
+    state.collapsed.store(collapsed, Ordering::SeqCst);
+    state.applied.store(collapsed, Ordering::SeqCst);
+    // Resize while hidden: avoids the clipped/stale frames you get when a
+    // transparent window is resized mid-animation.
+    let _ = window.hide();
+    place(window, collapsed);
+    // Re-assert a fully transparent backdrop after the resize, otherwise some
+    // WebView2 versions paint the resized surface with an opaque black band.
+    let _ = window.set_background_color(Some(tauri::utils::config::Color(0, 0, 0, 0)));
+    let _ = window.show();
+    let _ = window.set_always_on_top(true);
+    let _ = app.emit("mode-changed", collapsed);
+}
+
 fn toggle_bar(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    if window.is_visible().unwrap_or(false) {
-        let _ = window.hide();
-    } else {
-        // Showing always expands the bar, even if it was collapsed before hiding.
-        place(&window, false);
-        let _ = window.show();
-        let _ = window.set_always_on_top(true);
-        let _ = app.emit("mode-changed", false);
+    #[cfg(windows)]
+    trace(&format!("hotkey visible={} {}", window.is_visible().unwrap_or(false), process_power_state()));
+    #[cfg(not(windows))]
+    trace(&format!("hotkey visible={}", window.is_visible().unwrap_or(false)));
+    if !window.is_visible().unwrap_or(false) {
+        // Hidden: bring it back expanded natively — the webview may be
+        // suspended while hidden and would not process events promptly.
+        set_bar_state(app, &window, false);
+        return;
     }
+    // Visible: flip the state, tell the web UI to start its fade, and schedule
+    // the actual resize natively — never through JS timers, which Chromium may
+    // throttle for seconds in states the anti-throttle flags don't cover.
+    let next = !app.state::<BarState>().collapsed.load(Ordering::SeqCst);
+    app.state::<BarState>().collapsed.store(next, Ordering::SeqCst);
+    let _ = app.emit("bar-toggle", next);
+    trace(&format!("emit bar-toggle {next}"));
+    apply_bar_state_later(app.clone(), next);
 }
 
 fn spawn_plan_watcher(app: AppHandle) {
@@ -239,17 +378,21 @@ fn save_plan(plan: workbar_core::Plan) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_collapsed(window: WebviewWindow, collapsed: bool) -> Result<(), String> {
-    // Resize while hidden: avoids the clipped/stale frames you get when a
-    // transparent window is resized mid-animation.
-    window.hide().map_err(|e| e.to_string())?;
-    place(&window, collapsed);
-    // Re-assert a fully transparent backdrop after the resize, otherwise some
-    // WebView2 versions paint the resized surface with an opaque black band.
-    let _ = window.set_background_color(Some(tauri::utils::config::Color(0, 0, 0, 0)));
-    window.show().map_err(|e| e.to_string())?;
-    let _ = window.set_always_on_top(true);
+fn set_collapsed(app: AppHandle, collapsed: bool) -> Result<(), String> {
+    trace(&format!("set_collapsed {collapsed} requested"));
+    app.state::<BarState>().collapsed.store(collapsed, Ordering::SeqCst);
+    // The delayed native applier does the resize after the CSS fade grace and
+    // reports back via `bar-resized`; returning immediately keeps this command
+    // out of the throttled-JS-timer path too.
+    apply_bar_state_later(app, collapsed);
     Ok(())
+}
+
+/// Frontend hop timestamps; the message carries the JS wall clock (Date.now)
+/// so delivery delay through the IPC is measurable too.
+#[tauri::command]
+fn trace_js(msg: String) {
+    trace(&format!("js: {msg}"));
 }
 
 #[tauri::command]
@@ -299,7 +442,9 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     )?;
     let autostart_for_handler = autostart_item.clone();
 
-    let show_item = MenuItem::with_id(app, "show", "显示 / 隐藏  (Ctrl+Alt+W)", true, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, "show", "收起 / 展开  (Ctrl+Alt+W)", true, None::<&str>)?;
+    shortcut_settings::attach_menu(app.handle(), show_item.clone());
+    let shortcut_item = MenuItem::with_id(app, "shortcut", "设置快捷键…", true, None::<&str>)?;
     let data_item = MenuItem::with_id(app, "data", "打开数据目录", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "退出 Workbar", true, None::<&str>)?;
 
@@ -307,6 +452,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         app,
         &[
             &show_item,
+            &shortcut_item,
             &autostart_item,
             &data_item,
             &PredefinedMenuItem::separator(app)?,
@@ -320,6 +466,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "show" => toggle_bar(app),
+            "shortcut" => shortcut_settings::open(app),
             "data" => {
                 let _ = open_data_dir();
             }
@@ -369,14 +516,20 @@ fn main() {
     }
 
     tauri::Builder::default()
+        .manage(BarState {
+            collapsed: AtomicBool::new(false),
+            applied: AtomicBool::new(false),
+            operation: Mutex::new(()),
+        })
+        .manage(shortcut_settings::SettingsState::default())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state == ShortcutState::Pressed {
+                .with_handler(|app, shortcut, event| {
+                    if event.state == ShortcutState::Pressed && shortcut_settings::should_toggle(app, shortcut) {
                         toggle_bar(app);
                     }
                 })
@@ -389,7 +542,12 @@ fn main() {
             hide_bar,
             quit_app,
             open_data_dir,
-            app_info
+            app_info,
+            trace_js,
+            shortcut_settings::get_shortcut,
+            shortcut_settings::save_shortcut,
+            shortcut_settings::set_shortcut_recording,
+            shortcut_settings::close_shortcut_settings
         ])
         .setup(|app| {
             eprintln!("[workbar] setup: start");
@@ -408,12 +566,7 @@ fn main() {
             let _ = window.show();
             eprintln!("[workbar] setup: shown");
 
-            if let Ok(shortcut) = HOTKEY.parse::<Shortcut>() {
-                match app.global_shortcut().register(shortcut) {
-                    Ok(_) => eprintln!("[workbar] setup: hotkey ok"),
-                    Err(err) => eprintln!("[workbar] setup: hotkey failed: {err}"),
-                }
-            }
+            shortcut_settings::initialize(app.handle());
 
             eprintln!("[workbar] setup: tray...");
             if let Err(err) = setup_tray(app) {
@@ -429,6 +582,7 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            shortcut_settings::window_event(window, event);
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
