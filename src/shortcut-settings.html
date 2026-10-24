@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <title>Workbar · 快捷键</title>
+    <link rel="stylesheet" href="shortcut-settings.css" />
+  </head>
+  <body>
+    <section class="settings" aria-labelledby="title">
+      <header data-tauri-drag-region>
+        <div data-tauri-drag-region>
+          <span class="brand" data-tauri-drag-region>WORKBAR</span>
+          <h1 id="title" data-tauri-drag-region>设置快捷键</h1>
+        </div>
+        <button id="close" class="close" type="button" aria-label="关闭设置">×</button>
+      </header>
+      <label id="action">收起 / 展开 Workbar</label>
+      <button id="recorder" class="recorder" type="button" aria-labelledby="action" aria-describedby="hint" aria-pressed="false" disabled>
+        <span id="keys" class="keys"></span>
+        <span id="recordingText"></span>
+      </button>
+      <p id="hint" class="hint">点击按键区域，直接按下新的快捷键（单键也可以）</p>
+      <p id="status" class="status" role="status" aria-live="polite">正在读取…</p>
+      <footer>
+        <button id="restore" class="restore" type="button" disabled>恢复默认</button>
+        <div class="actions">
+          <button id="cancel" class="secondary" type="button">取消</button>
+          <button id="save" class="primary" type="button" disabled>保存</button>
+        </div>
+      </footer>
+    </section>
+    <script src="shortcut-settings.js"></script>
+  </body>
+</html>
