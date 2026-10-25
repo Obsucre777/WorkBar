@@ -313,11 +313,9 @@
   function renderUnits(view, immediate) {
     const list = computeUnits();
     const nodes = ensureUnits(Math.max(1, list.length));
-    el.units.classList.toggle("multi", nodes.length > 1);
     nodes.forEach((refs, index) => {
       const task = list[index] || null;
       refs.taskId = task ? task.id : null;
-      refs.root.classList.toggle("stacked", nodes.length > 1);
       refs.root.classList.toggle("idle", !task);
       refs.root.dataset.id = task ? task.id : "";
       const target = unitTarget(view, task);
