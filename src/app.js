@@ -7,13 +7,18 @@
   const listen = TAURI && TAURI.event ? TAURI.event.listen : null;
 
   const RING_LEN = 2 * Math.PI * 18;
+  const MAX_VISIBLE_TASKS = 4;
+  const TASK_COLOR_COUNT = 4;
 
   const $ = (id) => document.getElementById(id);
   const el = {
     stage: $("stage"),
     bar: $("bar"),
+    viewport: $("taskViewport"),
     units: $("units"),
-    more: $("more"),
+    previous: $("previousTasks"),
+    next: $("nextTasks"),
+    tail: document.querySelector(".tail"),
     collapse: $("collapse"),
     slim: $("slim"),
     slimBar: $("slimBar"),
@@ -34,6 +39,10 @@
   let saveQueued = false;
   let externalQueued = false;
   let collapsed = false;
+  let windowStart = 0;
+  let windowAnchor = null;
+  let visibleIds = [];
+  let windowCapacity = MAX_VISIBLE_TASKS;
 
   // ------------------------------------------------------------------ time
 
@@ -107,6 +116,16 @@
     return !!task.running || !!task.paused || Number(task.spent_sec) > 0;
   }
 
+  /** Task ids are assigned at creation. Hash only that immutable identity so
+   *  list order, completion, pagination and reloads never change the colour. */
+  function taskColorIndex(task) {
+    let hash = 2166136261;
+    for (const character of task.id) {
+      hash = Math.imul(hash ^ character.codePointAt(0), 16777619);
+    }
+    return (hash >>> 0) % TASK_COLOR_COUNT;
+  }
+
   function compareTasks(a, b) {
     const sa = hhmmToMin(a.start);
     const sb = hhmmToMin(b.start);
@@ -178,7 +197,7 @@
     unitNodes = [];
     for (let index = 0; index < count; index += 1) {
       const root = document.createElement("div");
-      root.className = `unit unit-${index}`;
+      root.className = "unit";
       root.innerHTML = [
         '<button class="ring" type="button" title="暂停 / 继续计时" aria-label="暂停或继续计时">',
         '  <svg class="ring-svg" viewBox="0 0 44 44" aria-hidden="true">',
@@ -226,14 +245,61 @@
     return unitNodes;
   }
 
-  /** Fit started tasks first, then waiting tasks, using the same rule for all.
-   *  Keep the selected tasks in stable time/id order, including across pauses. */
-  function computeUnits() {
-    const pending = (plan.tasks || []).filter((task) => !task.done).sort(compareTasks);
-    return [
-      ...pending.filter(hasStarted),
-      ...pending.filter((task) => !hasStarted(task)),
-    ].slice(0, 3).sort(compareTasks);
+  function pendingTasks() {
+    return (plan.tasks || []).filter((task) => !task.done).sort(compareTasks);
+  }
+
+  /** Keep card dimensions fixed; smaller screens show fewer whole cards. */
+  function cardLayout(total) {
+    const cardWidth = parseFloat(getComputedStyle(el.units).getPropertyValue("--card-width"));
+    if (collapsed) return { cardWidth, capacity: windowCapacity };
+    const barStyle = getComputedStyle(el.bar);
+    const tailStyle = getComputedStyle(el.tail);
+    const gap = parseFloat(barStyle.columnGap) || 0;
+    const available = el.bar.clientWidth
+      - parseFloat(barStyle.paddingLeft) - parseFloat(barStyle.paddingRight)
+      - el.collapse.offsetWidth - parseFloat(tailStyle.paddingLeft)
+      - parseFloat(tailStyle.paddingRight) - gap * 2;
+    let capacity = Math.max(1, Math.min(MAX_VISIBLE_TASKS, Math.floor(available / cardWidth)));
+    if (total > capacity) {
+      const navigationWidth = parseFloat(getComputedStyle(el.previous).width) * 2
+        + (parseFloat(tailStyle.columnGap) || 0) * 2;
+      capacity = Math.max(1, Math.min(MAX_VISIBLE_TASKS, Math.floor((available - navigationWidth) / cardWidth)));
+    }
+    return { cardWidth, capacity };
+  }
+
+  /** Preserve the visible task when other tasks are added, removed or finished. */
+  function computeUnits(pending) {
+    const { cardWidth, capacity } = cardLayout(pending.length);
+    windowCapacity = capacity;
+    const indices = new Map(pending.map((task, index) => [task.id, index]));
+    if (indices.has(windowAnchor)) {
+      windowStart = indices.get(windowAnchor);
+    } else {
+      const survivor = visibleIds.find((id) => indices.has(id));
+      windowStart = survivor === undefined
+        ? Math.max(0, pending.findIndex(hasStarted))
+        : indices.get(survivor);
+    }
+    windowStart = Math.max(0, Math.min(windowStart, pending.length - capacity));
+    const list = pending.slice(windowStart, windowStart + capacity);
+    windowAnchor = list[0]?.id || null;
+    visibleIds = list.map((task) => task.id);
+    el.viewport.style.width = `${Math.max(1, list.length) * cardWidth}px`;
+    const canBrowse = pending.length > capacity;
+    el.previous.hidden = !canBrowse;
+    el.next.hidden = !canBrowse;
+    el.previous.disabled = windowStart === 0;
+    el.next.disabled = windowStart + capacity >= pending.length;
+    return list;
+  }
+
+  function moveTaskWindow(direction) {
+    const pending = pendingTasks();
+    windowStart = Math.max(0, Math.min(windowStart + direction, pending.length - windowCapacity));
+    windowAnchor = pending[windowStart]?.id || null;
+    render(computeView(), true);
   }
 
   function unitTarget(view, task) {
@@ -309,18 +375,20 @@
     };
   }
 
-  function renderUnits(view, immediate) {
-    const list = computeUnits();
+  function renderUnits(view, pending, immediate) {
+    const list = computeUnits(pending);
     const nodes = ensureUnits(Math.max(1, list.length));
     nodes.forEach((refs, index) => {
       const task = list[index] || null;
       refs.taskId = task ? task.id : null;
       refs.root.classList.toggle("idle", !task);
       refs.root.dataset.id = task ? task.id : "";
+      refs.root.dataset.color = String(task ? taskColorIndex(task) : 0);
       const target = unitTarget(view, task);
       refs.root.classList.toggle("overdue", target.overdue);
       if (refs.titleText !== target.title) {
         refs.titleText = target.title;
+        refs.title.title = target.title;
         animateUnitTitle(refs.title, target.title, immediate);
       }
       const key = `${target.elapsed}|${target.estimate}|${target.status}|${target.statusClass}|${target.mode}|${target.progress.toFixed(4)}`;
@@ -349,30 +417,19 @@
     bar.dataset.state = view.state;
     bar.classList.toggle("complete", view.state === "complete");
 
-    const shownUnits = renderUnits(view, immediate);
-
-    // more pending tasks than fit on the bar: show "+N" (hover lists them)
-    const shownIds = new Set(shownUnits.map((task) => task.id));
-    const hidden = (plan.tasks || []).filter((task) => !task.done && !shownIds.has(task.id));
-    el.more.textContent = hidden.length ? `+${hidden.length}` : "";
-    el.more.hidden = hidden.length === 0;
-    el.more.title = hidden.length
-      ? `还有：${hidden.map((t) => `${t.title}${t.start ? ` ${t.start}` : ""}`).join("、")}`
-      : "";
-
-    renderSlim(view, shownUnits);
+    const pending = pendingTasks();
+    renderUnits(view, pending, immediate);
+    renderSlim(view, pending);
 
     return view;
   }
 
   /** Collapsed strip: only tasks that actually started are shown, no matter if
    *  they are running or paused. One started task keeps the familiar single
-   *  line; several become coloured segments (max 3, colour = task identity,
-   *  brightness = running / paused). Tasks that never started are not drawn. */
-  function renderSlim(view, shownUnits) {
-    // Reuse expanded slot colours even when unstarted tasks are omitted here.
-    const colorById = new Map(shownUnits.map((task, index) => [task.id, index]));
-    const started = shownUnits.filter(hasStarted);
+   *  line; several become coloured segments (colour = task identity,
+   *  brightness = running / paused). Browsing cards never hides a running strip. */
+  function renderSlim(view, pending) {
+    const started = pending.filter(hasStarted);
 
     const multi = started.length > 1;
     // Keep the strip clickable even when no task has started and no line is drawn.
@@ -395,7 +452,7 @@
       const task = started[0];
       const up = timerModeOf(task) === "up";
       const target = unitTarget(view, task);
-      el.slimBar.dataset.color = String(colorById.get(task.id));
+      el.slimBar.dataset.color = String(taskColorIndex(task));
       el.stage.dataset.lineState = target.overdue ? "overdue" : task.running ? "active" : "paused";
       el.slimBar.classList.toggle("up", up);
       // a stopwatch fills the whole line (CSS drops the retraction transform);
@@ -427,7 +484,7 @@
     Array.from(el.slimLine.children).forEach((seg) => {
       const task = started.find((t) => t.id === seg.dataset.id);
       if (!task) return;
-      seg.dataset.color = String(colorById.get(task.id));
+      seg.dataset.color = String(taskColorIndex(task));
       const up = timerModeOf(task) === "up";
       seg.classList.toggle("up", up);
       if (!up) {
@@ -701,9 +758,14 @@
   // ------------------------------------------------------------------- wire
 
   function wire() {
+    el.previous.addEventListener("click", () => moveTaskWindow(-1));
+    el.next.addEventListener("click", () => moveTaskWindow(1));
     el.collapse.addEventListener("click", collapse);
     el.slim.addEventListener("click", expand);
     document.addEventListener("contextmenu", (event) => event.preventDefault());
+    window.addEventListener("resize", () => {
+      if (!collapsed) render(computeView(), true);
+    });
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) tick();
     });

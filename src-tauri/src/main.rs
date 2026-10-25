@@ -19,7 +19,7 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_global_shortcut::ShortcutState;
 
-const PILL_WIDTH: f64 = 900.0;
+const PILL_WIDTH: f64 = 1120.0;
 const PILL_HEIGHT: f64 = 64.0;
 /// Margins around the pill inside the window, so the CSS drop shadow can fade
 /// out before it hits the window edge (otherwise it is cut into a hard black

@@ -17,12 +17,19 @@
 
       <section id="bar" class="bar" data-state="active" aria-label="Workbar">
         <!-- every displayed task uses the same independent timer controls -->
-        <div id="units" class="units"></div>
-        <span id="more" class="more" hidden></span>
+        <div id="taskViewport" class="task-viewport" role="group" aria-label="任务卡片">
+          <div id="units" class="units"></div>
+        </div>
 
         <div class="spacer" aria-hidden="true"></div>
 
         <div class="tail">
+          <button id="previousTasks" class="ghost task-nav" type="button" title="查看前一个任务" aria-label="查看前一个任务" aria-controls="units" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6" /></svg>
+          </button>
+          <button id="nextTasks" class="ghost task-nav" type="button" title="查看后一个任务" aria-label="查看后一个任务" aria-controls="units" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6" /></svg>
+          </button>
           <button id="collapse" class="ghost" type="button" title="收起成一条线" aria-label="收起">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 14.5 12 8.5l6 6" /></svg>
           </button>

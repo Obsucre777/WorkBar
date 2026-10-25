@@ -48,6 +48,10 @@ function bootstrap() {
   if (scene === 'second') plan.tasks = [countdown('a'), countdown('b', 409), countdown('c')];
   if (scene === 'third') plan.tasks = [countdown('a'), countdown('b'), countdown('c', 409)];
   if (scene === 'single') plan.tasks = [countdown('a', 409)];
+  if (scene === 'paging') plan.tasks = 'abcdefgh'.split('').map((id) => ({
+    ...countdown(id), title: `任务 ${id}：固定长度的卡片与独立计时`,
+    running: id !== 'c', paused: id === 'c',
+  }));
   if (scene === 'reuse') plan.tasks[2] = countdown('c');
   if (scene === 'compact') plan.tasks = [
     { ...countdown('a', 951), est_min: 10 },
@@ -168,7 +172,7 @@ async function runInBrowser() {
     window.__fixturePlan = restoredPlan;
     window.__fixtureClock = clock;
     frame = document.createElement('iframe');
-    frame.style.cssText = 'width:980px;height:100px;border:0';
+    frame.style.cssText = 'width:1128px;height:100px;border:0';
     const loaded = new Promise((resolve, reject) => {
       frame.onload = resolve;
       frame.onerror = reject;
@@ -211,7 +215,7 @@ async function runInBrowser() {
     assert(`${id}: no extra overdue wording`, status.textContent === '' && status.hidden);
   }
   function matchingStrip(view, id, slot, label) {
-    const palette = [identity.a, identity.b, identity.c];
+    const palette = [identity.a, identity.b, identity.c, 'rgb(110, 231, 183)'];
     const single = !view.doc.getElementById('slimBar').hidden;
     const strip = single ? view.doc.getElementById('slimBar') : view.doc.querySelector(`.slim-seg[data-id="${id}"]`);
     assert(`${label}: expanded task has the expected identity colour`, view.color(id, '.ring-fill', 'stroke') === palette[slot]);
@@ -249,7 +253,7 @@ async function runInBrowser() {
     for (const id of ['a', 'b', 'c']) idleState(view, id, `legacy selection position ${id}`);
     assert('legacy current id does not highlight a unit', !view.doc.querySelector('.unit.current'));
     view = await fixture('independent-visibility');
-    assert('legacy current id cannot displace an equally idle task', Boolean(view.unit('a') && view.unit('b') && view.unit('c')) && !view.unit('d'));
+    assert('legacy current id does not change the four visible idle tasks', ['a', 'b', 'c', 'd'].every((id) => view.unit(id)));
 
     for (const id of ['a', 'b', 'c']) {
       view = await fixture('independent-idle');
@@ -392,7 +396,7 @@ async function runInBrowser() {
     next.tasks.push({ id: 'd', title: 'replacement', timer: 'down', est_min: 5, spent_sec: 0, running: false });
     await view.win.__smoke.setPlan(next);
     assert('renderer reuses task nodes', view.unit('b') === reused);
-    assert('reused node clears obsolete overdue style', view.color('b', '.ring-fill', 'stroke') === identity.a && view.color('b', '.elapsed', 'color') === normalTime);
+    assert('reused node clears obsolete overdue style and keeps its task colour', view.color('b', '.ring-fill', 'stroke') === identity.b && view.color('b', '.elapsed', 'color') === normalTime);
     assert('reused node clears obsolete warning dot', view.color('b', '.pulse', 'backgroundColor') === running && view.color('b', '.pulse', 'opacity') === '1');
     assert('reused running node has full ring brightness', view.color('b', '.ring-fill', 'opacity') === '1');
     assert('reused node has no extra status wording', view.unit('b').querySelector('.status').textContent === '' && view.unit('b').querySelector('.status').hidden);
@@ -440,7 +444,7 @@ async function runInBrowser() {
     coloursPlan = view.win.__smoke.getPlan();
     coloursPlan.tasks = coloursPlan.tasks.filter((task) => task.id !== 'a');
     await view.win.__smoke.setPlan(coloursPlan);
-    matchingStrip(view, 'b', 0, 'single task after removing an earlier unstarted task');
+    matchingStrip(view, 'b', 1, 'single task keeps cyan after removing an earlier unstarted task');
 
     view = await fixture('colour-multi');
     matchingStrip(view, 'b', 1, 'cyan segment after an unstarted task');
@@ -450,13 +454,13 @@ async function runInBrowser() {
     coloursPlan.tasks[0].done = true;
     await view.win.__smoke.setPlan(coloursPlan);
     assert('unchanged started ids reuse the segment nodes', [...view.doc.querySelectorAll('.slim-seg')].every((segment, index) => segment === reusedSegments[index]));
-    matchingStrip(view, 'b', 0, 'reused segment after earlier task completion');
-    matchingStrip(view, 'c', 1, 'reused second segment after earlier task completion');
+    matchingStrip(view, 'b', 1, 'reused segment keeps cyan after earlier task completion');
+    matchingStrip(view, 'c', 2, 'reused second segment keeps pink after earlier task completion');
 
     view = await fixture('colour-third');
     matchingStrip(view, 'c', 2, 'single running task after two unstarted tasks');
     view = await fixture('colour-pinned');
-    matchingStrip(view, 'd', 2, 'running task kept visible by the common started-task rule');
+    matchingStrip(view, 'd', 3, 'fourth running task retains its own identity colour');
 
     view = await fixture('single');
     view.unit('a').querySelector('.ring').click();
@@ -500,6 +504,162 @@ async function runInBrowser() {
       const style = view.win.getComputedStyle(button);
       assert(`${state}: placeholder has no usable done button`, view.doc.getElementById('bar').dataset.state === state && button.disabled && style.opacity === '0' && style.pointerEvents === 'none');
     }
+
+    // Navigation changes only the viewed window; task state and colours belong
+    // to the tasks, including the running tasks outside that window.
+    const visibleTasks = () => [...view.doc.querySelectorAll('.unit')].map((node) => node.dataset.id);
+    const previousTasks = () => view.doc.getElementById('previousTasks');
+    const nextTasks = () => view.doc.getElementById('nextTasks');
+    function fixedCards(label) {
+      const viewport = view.doc.getElementById('taskViewport').getBoundingClientRect();
+      for (const node of view.doc.querySelectorAll('.unit')) {
+        const rect = node.getBoundingClientRect();
+        const ring = node.querySelector('.ring').getBoundingClientRect();
+        const done = node.querySelector('.done').getBoundingClientRect();
+        assert(`${label}: ${node.dataset.id} stays 240px wide`, rect.width === 240);
+        assert(`${label}: ${node.dataset.id} keeps full-size controls`, ring.width === 38 && done.width === 26);
+        assert(`${label}: ${node.dataset.id} controls fit inside the viewport`, ring.left >= viewport.left && done.right <= viewport.right);
+      }
+    }
+    view = await fixture('paging');
+    const pagingPlan = view.win.__smoke.getPlan();
+    for (const count of [1, 2, 3, 4]) {
+      view = await fixture('paging', { ...pagingPlan, tasks: pagingPlan.tasks.slice(0, count) });
+      assert(`${count} tasks fit without navigation`, visibleTasks().length === count && previousTasks().hidden && nextTasks().hidden);
+      fixedCards(`${count} visible tasks`);
+    }
+    view = await fixture('paging');
+    assert('overflow starts with exactly four tasks', visibleTasks().join('') === 'abcd');
+    assert('overflow shows both arrows with a disabled left boundary', !previousTasks().hidden && !nextTasks().hidden && previousTasks().disabled && !nextTasks().disabled);
+    assert('collapsed line includes tasks outside the visible window', view.doc.querySelectorAll('.slim-seg').length === 8);
+    const pagingBefore = JSON.stringify(view.win.__smoke.getPlan());
+    const pagingSegments = [...view.doc.querySelectorAll('.slim-seg')];
+    const cyanBefore = view.color('b', '.ring-fill', 'stroke');
+    nextTasks().click();
+    assert('right arrow advances by one task', visibleTasks().join('') === 'bcde');
+    assert('a task keeps its colour after moving to a different slot', view.color('b', '.ring-fill', 'stroke') === cyanBefore);
+    assert('browsing does not mutate or save task state', JSON.stringify(view.win.__smoke.getPlan()) === pagingBefore);
+    assert('browsing preserves every collapsed segment node', [...view.doc.querySelectorAll('.slim-seg')].every((node, index) => node === pagingSegments[index]));
+    fixedCards('after moving right');
+    matchingStrip(view, 'd', 3, 'fourth colour survives browsing');
+    previousTasks().click();
+    assert('left arrow returns to the previous window', visibleTasks().join('') === 'abcd');
+    previousTasks().click();
+    assert('left boundary cannot advance before the first task', visibleTasks().join('') === 'abcd');
+    await view.win.__smoke.setClock(12, 0, 5);
+    for (let index = 0; index < 4; index += 1) nextTasks().click();
+    assert('last window contains the last four tasks', visibleTasks().join('') === 'efgh');
+    assert('right boundary disables the next arrow', nextTasks().disabled && !previousTasks().disabled);
+    assert('offscreen task keeps counting while browsing other tasks', view.unit('g').querySelector('.elapsed').textContent === '01:05');
+    nextTasks().click();
+    assert('right boundary cannot create an empty page', visibleTasks().join('') === 'efgh');
+    view.unit('h').querySelector('.done').click();
+    await settled();
+    assert('finishing a task on the last window fills the remaining four slots', visibleTasks().join('') === 'defg');
+    let pagingSaved = view.win.__smoke.getPlan();
+    assert('last-window completion only completes its own task', pagingSaved.tasks.find((task) => task.id === 'h').done && pagingSaved.tasks.filter((task) => task.id !== 'h').every((task) => !task.done));
+    assert('offscreen running task survives completion on another window', pagingSaved.tasks.find((task) => task.id === 'a').running);
+    pagingSaved.tasks = pagingSaved.tasks.filter((task) => !['e', 'f', 'g'].includes(task.id));
+    await view.win.__smoke.setPlan(pagingSaved);
+    assert('external removals clamp the window and hide unused arrows', visibleTasks().join('') === 'abcd' && previousTasks().hidden && nextTasks().hidden);
+    fixedCards('after external removals');
+
+    view = await fixture('paging');
+    nextTasks().click();
+    const inserted = view.win.__smoke.getPlan();
+    inserted.tasks.push({ id: '00', title: '新加的未开始任务', timer: 'up', spent_sec: 0, running: false });
+    await view.win.__smoke.setPlan(inserted);
+    assert('inserting an earlier task preserves the visible anchor', visibleTasks().join('') === 'bcde');
+    view.unit('e').querySelector('.ring').click();
+    await settled();
+    const pausedOnPage = view.win.__smoke.getPlan();
+    assert('a reused card button pauses the displayed task', pausedOnPage.tasks.find((task) => task.id === 'e').paused && !pausedOnPage.tasks.find((task) => task.id === 'e').running);
+    assert('pausing a displayed task does not start a newly inserted task', !pausedOnPage.tasks.find((task) => task.id === '00').running && pausedOnPage.tasks.find((task) => task.id === 'a').running);
+    assert('pausing preserves the viewed task order', visibleTasks().join('') === 'bcde');
+    previousTasks().click();
+    nextTasks().click();
+    assert('paused state survives moving away and back', view.unit('e').querySelector('.ring').dataset.mode === 'paused');
+    frame.style.width = '780px';
+    view.win.dispatchEvent(new view.win.Event('resize'));
+    assert('narrow windows show fewer complete cards', visibleTasks().length === 2 && !previousTasks().hidden && !nextTasks().hidden);
+    fixedCards('narrow window');
+    frame.style.width = '1128px';
+    view.win.dispatchEvent(new view.win.Event('resize'));
+    assert('widening restores four complete cards', visibleTasks().length === 4);
+    fixedCards('restored window');
+    view.doc.getElementById('collapse').click();
+    await settled();
+    view.doc.getElementById('slim').click();
+    await settled();
+    assert('collapse and expand preserve the browsed window', visibleTasks().join('') === 'bcde');
+    const onlyLastRunning = { ...pagingPlan, tasks: pagingPlan.tasks.map((task) => ({ ...task, running: task.id === 'h', paused: false, spent_sec: task.id === 'h' ? 60 : 0 })) };
+    view = await fixture('paging', onlyLastRunning);
+    assert('initial window keeps an already running task visible', Boolean(view.unit('h')));
+    for (let index = 0; index < 4; index += 1) previousTasks().click();
+    assert('navigation can reach all earlier unstarted tasks', visibleTasks().join('') === 'abcd');
+
+    // Reproduce the position-based colour bug with opaque ids, then verify the
+    // same identities after completion, deletion, sorting and a full reload.
+    const stableIds = ['t9f1e35a0', 't1b22e3c4', '任务-🕘-alpha', 't00445566'];
+    view = await fixture('paging', { ...pagingPlan, tasks: stableIds.map((id) => ({
+      id, title: id, timer: 'up', spent_sec: 60, running: true,
+    })) });
+    const stableColours = new Map(stableIds.map((id) => {
+      const segment = view.doc.querySelector(`.slim-seg[data-id="${id}"]`);
+      return [id, {
+        slot: view.unit(id).dataset.color,
+        stroke: view.color(id, '.ring-fill', 'stroke'),
+        gradient: view.win.getComputedStyle(segment).getPropertyValue('--task-line').trim(),
+      }];
+    }));
+    function unchangedColours(label) {
+      const remaining = view.win.__smoke.getPlan().tasks.filter((task) => !task.done && stableColours.has(task.id));
+      for (const task of remaining) {
+        const expected = stableColours.get(task.id);
+        const unit = view.unit(task.id);
+        if (unit) {
+          assert(`${label}: ${task.id} keeps its expanded colour`, unit.dataset.color === expected.slot && view.color(task.id, '.ring-fill', 'stroke') === expected.stroke);
+        }
+        const strip = view.doc.getElementById('slimBar').hidden
+          ? view.doc.querySelector(`.slim-seg[data-id="${task.id}"]`)
+          : view.doc.getElementById('slimBar');
+        assert(`${label}: ${task.id} keeps its collapsed colour`, strip.dataset.color === expected.slot && view.win.getComputedStyle(strip).getPropertyValue('--task-line').trim() === expected.gradient);
+      }
+    }
+    const firstCompletedId = visibleTasks()[0];
+    view.unit(firstCompletedId).querySelector('.done').click();
+    await settled();
+    unchangedColours('earlier task completed');
+    const nextDeletedId = visibleTasks()[0];
+    let fixedPlan = view.win.__smoke.getPlan();
+    fixedPlan.tasks = fixedPlan.tasks.filter((task) => ![firstCompletedId, nextDeletedId].includes(task.id));
+    await view.win.__smoke.setPlan(fixedPlan);
+    unchangedColours('earlier task deleted');
+    fixedPlan = view.win.__smoke.getPlan();
+    fixedPlan.tasks.reverse();
+    fixedPlan.tasks.forEach((task, index) => {
+      task.start = index === 0 ? '23:59' : '23:58';
+      task.title = `修改后的标题 ${index}`;
+      task.note = '改变标题和计划时间不改变任务身份';
+    });
+    await view.win.__smoke.setPlan(fixedPlan);
+    unchangedColours('tasks renamed and reordered');
+    view.unit(visibleTasks()[0]).querySelector('.ring').click();
+    await settled();
+    unchangedColours('task paused');
+    view = await fixture('paging', view.win.__smoke.getPlan());
+    unchangedColours('full renderer reload');
+    fixedPlan = view.win.__smoke.getPlan();
+    fixedPlan.tasks.push({ id: '000new', title: '新加在前面的任务', timer: 'up', spent_sec: 1, running: true });
+    fixedPlan.tasks.push({ id: firstCompletedId, title: '重新打开原来的任务', timer: 'up', spent_sec: 60, running: true });
+    await view.win.__smoke.setPlan(fixedPlan);
+    unchangedColours('new task inserted and completed task reopened');
+    view = await fixture('paging', view.win.__smoke.getPlan());
+    unchangedColours('reload after insertion and reopening');
+    fixedPlan = view.win.__smoke.getPlan();
+    fixedPlan.tasks = fixedPlan.tasks.filter((task) => task.id === firstCompletedId);
+    await view.win.__smoke.setPlan(fixedPlan);
+    unchangedColours('only one original task remains');
   } catch (error) {
     checks.push({ name: error.stack || String(error), ok: false });
   }

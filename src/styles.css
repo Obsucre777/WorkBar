@@ -1,5 +1,5 @@
 /* Workbar — floating day bar
-   Everything is hand-tuned for a 900x76 transparent, always-on-top window. */
+   Fixed-width task cards in a transparent, always-on-top window. */
 
 :root {
   --ink: #f1f1f7;
@@ -11,6 +11,7 @@
   --warn: #ffc46b;
   --bar-h: 64px;
   --radius: 32px;
+  --card-width: 240px;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-soft: cubic-bezier(0.2, 0.9, 0.25, 1);
 }
@@ -116,30 +117,39 @@ body {
 
 /* ------------------------------------------------------- task units */
 
+.task-viewport {
+  flex: 0 1 auto;
+  min-width: 0;
+  width: var(--card-width);
+  overflow: hidden;
+}
+
 .units {
   display: flex;
   align-items: center;
-  min-width: 0;
-  flex: 0 1 auto;
+  width: max-content;
+  padding: 8px 0;
 }
 
 .unit {
   display: flex;
   align-items: center;
   gap: 9px;
+  flex: 0 0 var(--card-width);
+  width: var(--card-width);
   min-width: 0;
-  padding-right: 6px;
+  padding: 0 6px;
+  border-left: 1px solid transparent;
 }
 
 /* parallel timers: identical task controls, divided by a separator */
 .unit + .unit {
-  margin-left: 10px;
-  padding-left: 14px;
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  border-left-color: rgba(255, 255, 255, 0.08);
 }
 
 .unit .now {
-  max-width: 210px;
+  flex: 1 1 0;
+  max-width: none;
 }
 
 .unit .ring,
@@ -149,19 +159,24 @@ body {
 }
 
 /* per-unit identity colour; reused by collapsed lines for the same task */
-.unit-0 .ring-fill {
+.unit[data-color="0"] .ring-fill {
   stroke: #8fa2ff;
   filter: drop-shadow(0 0 5px rgba(143, 162, 255, 0.4));
 }
 
-.unit-1 .ring-fill {
+.unit[data-color="1"] .ring-fill {
   stroke: #22d3ee;
   filter: drop-shadow(0 0 5px rgba(34, 211, 238, 0.4));
 }
 
-.unit-2 .ring-fill {
+.unit[data-color="2"] .ring-fill {
   stroke: #fb7185;
   filter: drop-shadow(0 0 5px rgba(251, 113, 133, 0.4));
+}
+
+.unit[data-color="3"] .ring-fill {
+  stroke: #6ee7b7;
+  filter: drop-shadow(0 0 5px rgba(110, 231, 183, 0.4));
 }
 
 .unit .title {
@@ -426,21 +441,6 @@ body {
   transform: scale(0.94);
 }
 
-/* --------------------------------------------------------------- more */
-
-/* "+N" when more pending tasks exist than fit on the bar */
-.more {
-  flex: 0 0 auto;
-  font-size: 11px;
-  letter-spacing: 0.3px;
-  color: #61616f;
-  font-variant-numeric: tabular-nums;
-}
-
-.more[hidden] {
-  display: none;
-}
-
 .spacer {
   flex: 1 1 auto;
 }
@@ -451,6 +451,7 @@ body {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  gap: 4px;
   padding-right: 2px;
 }
 
@@ -488,6 +489,19 @@ body {
 
 .ghost:active {
   transform: scale(0.92);
+}
+
+.task-nav {
+  flex: 0 0 28px;
+}
+
+.task-nav[hidden] {
+  display: none;
+}
+
+.task-nav:disabled {
+  opacity: 0.25;
+  pointer-events: none;
 }
 
 /* ------------------------------------------------ collapsed: one thin line */
@@ -612,6 +626,11 @@ body {
 .slim-bar[data-color="2"],
 .slim-seg[data-color="2"] {
   --task-line: linear-gradient(90deg, #fb7185, #f472b6);
+}
+
+.slim-bar[data-color="3"],
+.slim-seg[data-color="3"] {
+  --task-line: linear-gradient(90deg, #34d399, #6ee7b7);
 }
 
 /* never let the line show up inside the expanded (tall) window */
