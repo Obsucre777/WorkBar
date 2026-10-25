@@ -218,7 +218,7 @@ pub fn open(app: &AppHandle) {
             }
             let mut builder = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("shortcut-settings.html".into()))
                 .title("Workbar · 快捷键").inner_size(440.0, 320.0).center().resizable(false)
-                .maximizable(false).minimizable(false).decorations(false).transparent(true)
+                .maximizable(false).minimizable(false).decorations(false).shadow(false).transparent(true)
                 .background_color(tauri::utils::config::Color(0, 0, 0, 0)).always_on_top(true).visible(false);
             if let Some(main) = app.config().app.windows.iter().find(|window| window.label == "main") {
                 if let Some(args) = &main.additional_browser_args { builder = builder.additional_browser_args(args); }
