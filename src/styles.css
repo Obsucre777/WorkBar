@@ -153,7 +153,7 @@ body {
   height: 38px;
 }
 
-/* per-unit identity colour; matches the collapsed segments left to right */
+/* per-unit identity colour; reused by collapsed lines for the same task */
 .unit-0 .ring-fill {
   stroke: #8fa2ff;
   filter: drop-shadow(0 0 5px rgba(143, 162, 255, 0.4));
@@ -606,7 +606,7 @@ body {
   height: 4px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 55%),
-    linear-gradient(90deg, #7f90ff, #b98cff 50%, #7f90ff);
+    var(--task-line, linear-gradient(90deg, #6e7bff, #a57bff));
   transform: scaleX(calc(max(0.008, 1 - var(--p, 0))));
   transform-origin: center;
   transition:
@@ -647,6 +647,7 @@ body {
 .slim-seg {
   flex: 1 1 0;
   height: 100%;
+  background: var(--task-line);
   transform: scaleX(calc(max(0.012, 1 - var(--p, 0))));
   transform-origin: center;
   transition:
@@ -690,16 +691,19 @@ body {
   }
 }
 
-.slim-seg.seg-0 {
-  background: linear-gradient(90deg, #6e7bff, #a57bff);
+.slim-bar[data-color="0"],
+.slim-seg[data-color="0"] {
+  --task-line: linear-gradient(90deg, #6e7bff, #a57bff);
 }
 
-.slim-seg.seg-1 {
-  background: linear-gradient(90deg, #22d3ee, #2dd4bf);
+.slim-bar[data-color="1"],
+.slim-seg[data-color="1"] {
+  --task-line: linear-gradient(90deg, #22d3ee, #2dd4bf);
 }
 
-.slim-seg.seg-2 {
-  background: linear-gradient(90deg, #fb7185, #f472b6);
+.slim-bar[data-color="2"],
+.slim-seg[data-color="2"] {
+  --task-line: linear-gradient(90deg, #fb7185, #f472b6);
 }
 
 /* never let the line show up inside the expanded (tall) window */
@@ -795,14 +799,12 @@ body {
 /* --------------------------------------------------------------- states */
 
 .bar[data-state="empty"] .done,
-.bar[data-state="upcoming"] .done,
 .bar[data-state="complete"] .done {
   opacity: 0;
   pointer-events: none;
 }
 
-.bar[data-state="empty"] .ring-fill,
-.bar[data-state="upcoming"] .ring-fill {
+.bar[data-state="empty"] .ring-fill {
   opacity: 0.18;
 }
 

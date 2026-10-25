@@ -429,16 +429,7 @@
     else if (view.state === "paused") lineState = "paused";
     el.stage.dataset.lineState = lineState;
 
-    const currentProgress = view.task
-      ? Math.min(
-          1,
-          Math.max(
-            0,
-            Number(view.task.spent_sec || 0) / Math.max(1, Number(view.task.est_min || 25) * 60)
-          )
-        )
-      : 0;
-    renderSlim(view, currentProgress);
+    renderSlim(view, shownUnits);
 
     return view;
   }
@@ -447,7 +438,10 @@
    *  they are running or paused. One started task keeps the familiar single
    *  line; several become coloured segments (max 3, colour = task identity,
    *  brightness = running / paused). Tasks that never started are not drawn. */
-  function renderSlim(view, currentProgress) {
+  function renderSlim(view, shownUnits) {
+    // Reuse expanded slot colours even when unstarted tasks are omitted here.
+    const colorById = new Map(shownUnits.map((task, index) => [task.id, index]));
+    const currentId = view.task ? view.task.id : null;
     const started = (plan.tasks || [])
       .filter((task) => !task.done && (task.running || Number(task.spent_sec) > 0))
       .map((task) => ({ task, start: hhmmToMin(task.start) }))
@@ -471,6 +465,7 @@
       slimSignature = "";
       el.slimLine.replaceChildren();
       el.slimBar.classList.remove("up");
+      delete el.slimBar.dataset.color;
       el.slimBar.style.setProperty("--p", "0");
       return;
     }
@@ -480,6 +475,9 @@
       el.slimLine.replaceChildren();
       const task = started[0];
       const up = timerModeOf(task) === "up";
+      const target = unitTarget(view, task, task.id === currentId);
+      el.slimBar.dataset.color = String(colorById.get(task.id) ?? 0);
+      el.stage.dataset.lineState = target.overdue ? "overdue" : task.running ? "active" : "paused";
       el.slimBar.classList.toggle("up", up);
       // a stopwatch fills the whole line (CSS drops the retraction transform);
       // only a countdown tracks progress
@@ -498,18 +496,18 @@
     if (signature !== slimSignature) {
       slimSignature = signature;
       el.slimLine.replaceChildren();
-      started.forEach((task, index) => {
+      started.forEach((task) => {
         const seg = document.createElement("i");
-        seg.className = `slim-seg seg-${index}`;
+        seg.className = "slim-seg";
         seg.dataset.id = task.id;
         el.slimLine.append(seg);
       });
     }
 
-    const currentId = view.task ? view.task.id : null;
-    Array.from(el.slimLine.children).forEach((seg) => {
+    Array.from(el.slimLine.children).forEach((seg, index) => {
       const task = started.find((t) => t.id === seg.dataset.id);
       if (!task) return;
+      seg.dataset.color = String(colorById.get(task.id) ?? index);
       const up = timerModeOf(task) === "up";
       seg.classList.toggle("up", up);
       if (!up) {

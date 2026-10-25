@@ -48,6 +48,27 @@ function bootstrap() {
     { ...countdown('c'), est_min: 60 },
   ];
   if (scene === 'boundary') plan.tasks = [countdown('a', 300), countdown('b', 359), countdown('c', 360)];
+  const idle = (id, start) => ({ ...countdown(id, 0), start, running: false });
+  const stopwatch = (id) => ({ id, title: id, timer: 'up', est_min: 0, spent_sec: 674, running: true });
+  if (scene === 'colour-single' || scene === 'colour-multi') {
+    plan.current_id = 'b';
+    plan.tasks = [idle('a', '23:59'), stopwatch('b')];
+    if (scene === 'colour-multi') plan.tasks.push(countdown('c'));
+  }
+  if (scene === 'colour-third' || scene === 'colour-pinned') {
+    plan.current_id = scene === 'colour-third' ? 'c' : 'd';
+    plan.tasks = [idle('a', '23:57'), idle('b', '23:58'), stopwatch('c')];
+    if (scene === 'colour-pinned') plan.tasks = [idle('a', '23:57'), idle('b', '23:58'), idle('c', '23:59'), stopwatch('d')];
+  }
+  if (scene === 'done-upcoming' || scene === 'done-upcoming-only') {
+    // Keep scheduled tasks in the future even when this script runs at night.
+    window.Date = class extends Date { getHours() { return 12; } getMinutes() { return 0; } };
+    plan.current_id = null;
+    plan.tasks = [idle('a', '23:57'), idle('b', '23:58')];
+    if (scene === 'done-upcoming') plan.tasks.push({ ...countdown('c', 79), est_min: 30 });
+  }
+  if (scene === 'done-empty') { plan.current_id = null; plan.tasks = []; }
+  if (scene === 'done-complete') { plan.current_id = null; plan.tasks = [{ ...countdown('a'), done: true, running: false }]; }
   const clone = (value) => JSON.parse(JSON.stringify(value));
   async function emit(name, payload) {
     for (const handler of listeners.get(name) || []) await handler({ payload });
@@ -130,6 +151,25 @@ async function runInBrowser() {
     const status = view.unit(id).querySelector('.status');
     assert(`${id}: no extra overdue wording`, status.textContent === '' && status.hidden);
   }
+  function matchingStrip(view, id, slot, label) {
+    const palette = [identity.a, identity.b, identity.c];
+    const single = !view.doc.getElementById('slimBar').hidden;
+    const strip = single ? view.doc.getElementById('slimBar') : view.doc.querySelector(`.slim-seg[data-id="${id}"]`);
+    assert(`${label}: expanded task has the expected identity colour`, view.color(id, '.ring-fill', 'stroke') === palette[slot]);
+    assert(`${label}: collapsed task strip exists`, Boolean(strip));
+    const gradient = view.win.getComputedStyle(strip).backgroundImage;
+    const matches = slot === 0
+      ? ['rgb(110, 123, 255)', 'rgb(127, 144, 255)'].some((colour) => gradient.includes(colour))
+      : gradient.includes(palette[slot]);
+    assert(`${label}: collapsed strip matches the expanded task colour`, matches);
+  }
+  function usableDone(view, id, label) {
+    const button = view.unit(id).querySelector('.done');
+    const style = view.win.getComputedStyle(button);
+    assert(`${label}: done button is enabled`, !button.disabled);
+    assert(`${label}: done button is visible`, Number(style.opacity) > 0);
+    assert(`${label}: done button accepts pointer input`, style.pointerEvents !== 'none');
+  }
   try {
     let view = await fixture('base');
     overdue(view, 'a');
@@ -194,6 +234,89 @@ async function runInBrowser() {
     view = await fixture('single');
     overdue(view, 'a');
     assert('single collapsed bar retains overdue gradient', view.win.getComputedStyle(view.doc.getElementById('slimBar')).backgroundImage.includes('rgb(255, 178, 87)'));
+    view = await fixture('colour-single');
+    matchingStrip(view, 'b', 1, 'single running task after an unstarted task');
+    view.doc.getElementById('collapse').click();
+    await Promise.resolve();
+    matchingStrip(view, 'b', 1, 'collapsed single running task');
+    view.doc.getElementById('slim').click();
+    await Promise.resolve();
+    matchingStrip(view, 'b', 1, 'expanded single running task');
+    view.unit('b').querySelector('.ring').click();
+    matchingStrip(view, 'b', 1, 'paused cyan single task');
+    view.unit('b').querySelector('.ring').click();
+    matchingStrip(view, 'b', 1, 'resumed cyan single task');
+    let coloursPlan = view.win.__smoke.getPlan();
+    coloursPlan.tasks.push({ id: 'c', title: 'c', timer: 'down', est_min: 5, spent_sec: 60, running: true });
+    await view.win.__smoke.setPlan(coloursPlan);
+    assert('adding a started task switches to multiple strips', view.doc.getElementById('slimBar').hidden);
+    matchingStrip(view, 'b', 1, 'cyan task after single-to-multiple transition');
+    matchingStrip(view, 'c', 2, 'pink task after single-to-multiple transition');
+    coloursPlan = view.win.__smoke.getPlan();
+    coloursPlan.tasks = coloursPlan.tasks.filter((task) => task.id !== 'c');
+    await view.win.__smoke.setPlan(coloursPlan);
+    assert('removing the second started task restores the single strip', !view.doc.getElementById('slimBar').hidden);
+    matchingStrip(view, 'b', 1, 'cyan task after multiple-to-single transition');
+    coloursPlan = view.win.__smoke.getPlan();
+    coloursPlan.tasks = coloursPlan.tasks.filter((task) => task.id !== 'a');
+    await view.win.__smoke.setPlan(coloursPlan);
+    matchingStrip(view, 'b', 0, 'single task after removing an earlier unstarted task');
+
+    view = await fixture('colour-multi');
+    matchingStrip(view, 'b', 1, 'cyan segment after an unstarted task');
+    matchingStrip(view, 'c', 2, 'pink segment after an unstarted task');
+    const reusedSegments = [...view.doc.querySelectorAll('.slim-seg')];
+    coloursPlan = view.win.__smoke.getPlan();
+    coloursPlan.tasks[0].done = true;
+    await view.win.__smoke.setPlan(coloursPlan);
+    assert('unchanged started ids reuse the segment nodes', [...view.doc.querySelectorAll('.slim-seg')].every((segment, index) => segment === reusedSegments[index]));
+    matchingStrip(view, 'b', 0, 'reused segment after earlier task completion');
+    matchingStrip(view, 'c', 1, 'reused second segment after earlier task completion');
+
+    view = await fixture('colour-third');
+    matchingStrip(view, 'c', 2, 'single running task after two unstarted tasks');
+    view = await fixture('colour-pinned');
+    matchingStrip(view, 'd', 2, 'current task kept visible beyond the first three pending tasks');
+
+    view = await fixture('single');
+    view.unit('a').querySelector('.ring').click();
+    matchingStrip(view, 'a', 0, 'paused overdue single task');
+    assert('paused overdue single strip becomes dim', view.win.getComputedStyle(view.doc.getElementById('slimBar')).opacity === '0.45');
+    view.unit('a').querySelector('.ring').click();
+    overdue(view, 'a');
+    assert('resumed overdue single strip becomes amber again', view.win.getComputedStyle(view.doc.getElementById('slimBar')).backgroundImage.includes('rgb(255, 178, 87)'));
+
+    view = await fixture('done-upcoming');
+    assert('scheduled tasks keep the overall upcoming state', view.doc.getElementById('bar').dataset.state === 'upcoming');
+    usableDone(view, 'c', 'running task beside future tasks');
+    assert('future tasks do not dim the running progress ring', view.color('c', '.ring-fill', 'opacity') === '1');
+    usableDone(view, 'a', 'future task beside a running task');
+    view.unit('c').querySelector('.ring').click();
+    await Promise.resolve();
+    assert('background task pauses without selecting a future task', view.unit('c').querySelector('.ring').dataset.mode === 'paused');
+    usableDone(view, 'c', 'paused task beside future tasks');
+    view.unit('c').querySelector('.ring').click();
+    await Promise.resolve();
+    view.unit('c').querySelector('.done').click();
+    await Promise.resolve();
+    let finished = view.win.__smoke.getPlan();
+    assert('done completes only the clicked running task and stops its timer', finished.tasks.find((task) => task.id === 'c').done && !finished.tasks.find((task) => task.id === 'c').running);
+    assert('finishing a background task preserves future tasks', finished.tasks.filter((task) => task.id !== 'c').every((task) => !task.done && !task.running));
+    assert('completed background task leaves the expanded bar', !view.unit('c'));
+
+    view = await fixture('done-upcoming-only');
+    usableDone(view, 'a', 'future task without running tasks');
+    view.unit('b').querySelector('.done').click();
+    await Promise.resolve();
+    finished = view.win.__smoke.getPlan();
+    assert('future task can finish without starting either timer', finished.tasks.find((task) => task.id === 'b').done && finished.tasks.every((task) => !task.running));
+    assert('completing a future task leaves the other pending', !finished.tasks.find((task) => task.id === 'a').done);
+    for (const [scene, state] of [['done-empty', 'empty'], ['done-complete', 'complete']]) {
+      view = await fixture(scene);
+      const button = view.doc.querySelector('.unit .done');
+      const style = view.win.getComputedStyle(button);
+      assert(`${state}: placeholder has no usable done button`, view.doc.getElementById('bar').dataset.state === state && button.disabled && style.opacity === '0' && style.pointerEvents === 'none');
+    }
   } catch (error) {
     checks.push({ name: error.stack || String(error), ok: false });
   }
