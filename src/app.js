@@ -181,9 +181,12 @@
     view.paused = paused.has(current.id);
     if (view.paused) view.state = "paused";
 
-    const est = Math.max(1, Number(current.est_min) || 25) * 60;
+    // only a countdown with a real estimate can go overdue. The old `|| 25`
+    // fallback made stopwatch tasks (est_min 0) trip the bar-wide amber
+    // overdue styling — every unit's ring — 25 minutes in
+    const estSec = Math.max(0, Number(current.est_min) || 0) * 60;
     const spent = Number(current.spent_sec) || 0;
-    view.overdueMin = est > 0 && spent > est ? Math.floor((spent - est) / 60) : 0;
+    view.overdueMin = estSec > 0 && spent > estSec ? Math.floor((spent - estSec) / 60) : 0;
 
     return view;
   }
