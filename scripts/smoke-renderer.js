@@ -141,10 +141,16 @@ async function runInBrowser() {
     assert(`${id}: normal elapsed colour`, view.color(id, '.elapsed', 'color') === normalTime);
     assert(`${id}: normal status dot stays green`, view.color(id, '.pulse', 'backgroundColor') === running);
     const isRunning = view.unit(id).querySelector('.ring').dataset.mode === 'running';
+    assert(`${id}: expanded ring follows running brightness`, view.color(id, '.ring-fill', 'opacity') === (isRunning ? '1' : '0.45'));
     assert(`${id}: status dot follows running state`, view.color(id, '.pulse', 'opacity') === (isRunning ? '1' : '0'));
+    if (!isRunning) {
+      assert(`${id}: paused play glyph stays clear`, view.color(id, '.glyph-play', 'opacity') === '0.95');
+      usableDone(view, id, `${id}: paused task`);
+    }
   }
   function overdue(view, id) {
     assert(`${id}: overdue ring colour`, view.color(id, '.ring-fill', 'stroke') === warn);
+    assert(`${id}: overdue running ring stays bright`, view.color(id, '.ring-fill', 'opacity') === '1');
     assert(`${id}: overdue elapsed colour`, view.color(id, '.elapsed', 'color') === warn);
     assert(`${id}: overdue status dot matches ring`, view.color(id, '.pulse', 'backgroundColor') === warn);
     assert(`${id}: overdue status dot stays visible`, view.color(id, '.pulse', 'opacity') === '1');
@@ -218,6 +224,7 @@ async function runInBrowser() {
     assert('renderer reuses task nodes', view.unit('b') === reused);
     assert('reused node clears obsolete overdue style', view.color('b', '.ring-fill', 'stroke') === identity.a && view.color('b', '.elapsed', 'color') === normalTime);
     assert('reused node clears obsolete warning dot', view.color('b', '.pulse', 'backgroundColor') === running && view.color('b', '.pulse', 'opacity') === '1');
+    assert('reused running node has full ring brightness', view.color('b', '.ring-fill', 'opacity') === '1');
     assert('reused node has no extra status wording', view.unit('b').querySelector('.status').textContent === '' && view.unit('b').querySelector('.status').hidden);
 
     view = await fixture('compact');
@@ -244,8 +251,10 @@ async function runInBrowser() {
     matchingStrip(view, 'b', 1, 'expanded single running task');
     view.unit('b').querySelector('.ring').click();
     matchingStrip(view, 'b', 1, 'paused cyan single task');
+    normal(view, 'b');
     view.unit('b').querySelector('.ring').click();
     matchingStrip(view, 'b', 1, 'resumed cyan single task');
+    normal(view, 'b');
     let coloursPlan = view.win.__smoke.getPlan();
     coloursPlan.tasks.push({ id: 'c', title: 'c', timer: 'down', est_min: 5, spent_sec: 60, running: true });
     await view.win.__smoke.setPlan(coloursPlan);
@@ -281,6 +290,7 @@ async function runInBrowser() {
     view = await fixture('single');
     view.unit('a').querySelector('.ring').click();
     matchingStrip(view, 'a', 0, 'paused overdue single task');
+    normal(view, 'a');
     assert('paused overdue single strip becomes dim', view.win.getComputedStyle(view.doc.getElementById('slimBar')).opacity === '0.45');
     view.unit('a').querySelector('.ring').click();
     overdue(view, 'a');
@@ -294,9 +304,11 @@ async function runInBrowser() {
     view.unit('c').querySelector('.ring').click();
     await Promise.resolve();
     assert('background task pauses without selecting a future task', view.unit('c').querySelector('.ring').dataset.mode === 'paused');
+    normal(view, 'c');
     usableDone(view, 'c', 'paused task beside future tasks');
     view.unit('c').querySelector('.ring').click();
     await Promise.resolve();
+    normal(view, 'c');
     view.unit('c').querySelector('.done').click();
     await Promise.resolve();
     let finished = view.win.__smoke.getPlan();

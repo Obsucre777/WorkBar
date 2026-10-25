@@ -327,6 +327,10 @@ body {
     opacity 0.3s ease;
 }
 
+.ring[data-mode="paused"] .ring-fill {
+  opacity: 0.45;
+}
+
 .ring-glyph {
   position: absolute;
   width: 12px;
