@@ -461,12 +461,16 @@
       .slice(0, 3);
 
     const multi = started.length > 1;
-    el.slimBar.hidden = multi || started.length === 0;
+    // Keep the single bar mounted even with nothing started: the "none" /
+    // "complete" line states style it as a dim neutral / green line, so the
+    // collapsed strip always stays visible and clickable.
+    el.slimBar.hidden = multi;
     el.slimLine.hidden = !multi;
 
     if (started.length === 0) {
       slimSignature = "";
       el.slimLine.replaceChildren();
+      el.slimBar.classList.remove("up");
       el.slimBar.style.setProperty("--p", "0");
       return;
     }
@@ -666,6 +670,18 @@
     };
   }
 
+  /** A plan left over from an earlier day rolls into today. Without this the
+   *  stale date drops computeView into the "empty" state, which hides the
+   *  finish button and blocks pausing while the task units still render —
+   *  the leftover work becomes impossible to control. */
+  function rollPlanDate() {
+    const today = todayString();
+    if (plan.date !== today) {
+      plan.date = today;
+      saveNow();
+    }
+  }
+
   async function loadPlan(immediate) {
     if (invoke) {
       try {
@@ -677,6 +693,7 @@
     } else {
       plan = normalizePlan(demoPlan());
     }
+    rollPlanDate();
     lastSnapshot = serialize();
     render(computeView(), immediate !== false);
   }
@@ -701,6 +718,7 @@
       if (local.running && !task.done) task.running = true;
     }
     plan = fresh;
+    rollPlanDate();
     lastSnapshot = serialize();
     render(computeView(), true);
   }
@@ -724,6 +742,8 @@
 
   function tick() {
     try {
+      // running across midnight must not leave the plan stale for a day
+      rollPlanDate();
       const nowMs = Date.now();
       const delta = Math.max(0, (nowMs - lastTickAt) / 1000);
       lastTickAt = nowMs;

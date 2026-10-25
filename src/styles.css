@@ -725,17 +725,11 @@ body {
   opacity: 0.3;
 }
 
-/* no work left (empty day / everything done): show nothing at all, but the
-   4px strip stays clickable so a click still expands the bar */
+/* Nothing left to show — no plan today, or the day fully finished — renders
+   nothing when collapsed. The 4px strip stays mounted, so a click on the very
+   top edge still expands, and the hotkey / tray always work. */
 .stage[data-line-state="none"] .slim-bar,
 .stage[data-line-state="complete"] .slim-bar {
-  opacity: 0;
-}
-
-.stage[data-line-state="complete"] .slim-bar {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 55%),
-    linear-gradient(90deg, #5fd6a8, #8fe0ff 50%, #5fd6a8);
   opacity: 0;
 }
 
