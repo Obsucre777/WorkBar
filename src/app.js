@@ -181,9 +181,7 @@
     view.paused = paused.has(current.id);
     if (view.paused) view.state = "paused";
 
-    // only a countdown with a real estimate can go overdue. The old `|| 25`
-    // fallback made stopwatch tasks (est_min 0) trip the bar-wide amber
-    // overdue styling — every unit's ring — 25 minutes in
+    // Only a countdown with a real estimate can go overdue.
     const estSec = Math.max(0, Number(current.est_min) || 0) * 60;
     const spent = Number(current.spent_sec) || 0;
     view.overdueMin = estSec > 0 && spent > estSec ? Math.floor((spent - estSec) / 60) : 0;
@@ -295,6 +293,7 @@
         estimate: complete ? `完成 ${view.doneCount} 项` : "等待 AI 排计划",
         status: complete ? "休息一下" : "用 AI 说一句就能排",
         statusClass: "",
+        overdue: false,
         progress: complete ? 1 : 0,
         mode: "idle",
         pulse: false,
@@ -336,6 +335,7 @@
         estimate: startMin === null ? "待开始" : `${task.start} 开始`,
         status,
         statusClass,
+        overdue: false,
         progress: 0,
         mode: "idle",
         pulse: false,
@@ -344,10 +344,11 @@
     }
 
     const mode = task.running ? "running" : "paused";
+    const isOverdue = !up && mode === "running" && overdue > 0;
     // already timed (running or paused): elapsed / estimate, nothing else
     let status = "";
     let statusClass = "";
-    if (!up && mode === "running" && overdue > 0) {
+    if (isOverdue) {
       status = `超时 ${overdue} 分钟`;
       statusClass = "warn";
     }
@@ -357,6 +358,7 @@
       estimate: up ? "" : formatEstimate(task.est_min),
       status,
       statusClass,
+      overdue: isOverdue,
       progress,
       mode,
       pulse: !!task.running,
@@ -378,6 +380,7 @@
       refs.root.classList.toggle("idle", !task);
       refs.root.dataset.id = task ? task.id : "";
       const target = unitTarget(view, task, isCurrent);
+      refs.root.classList.toggle("overdue", target.overdue);
       if (refs.titleText !== target.title) {
         refs.titleText = target.title;
         animateUnitTitle(refs.title, target.title, immediate);
@@ -405,7 +408,6 @@
   function render(view, immediate) {
     const { bar } = el;
     bar.dataset.state = view.state;
-    bar.classList.toggle("overdue", view.state === "active" && view.overdueMin > 0);
     bar.classList.toggle("complete", view.state === "complete");
 
     const shownUnits = renderUnits(view, immediate);

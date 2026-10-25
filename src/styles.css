@@ -813,11 +813,11 @@ body {
   color: var(--dim);
 }
 
-.bar.overdue .elapsed {
+.unit.overdue .elapsed {
   color: var(--warn);
 }
 
-.bar.overdue .ring-fill {
+.unit.overdue .ring-fill {
   stroke: var(--warn);
   filter: drop-shadow(0 0 6px rgba(255, 196, 107, 0.4));
 }
