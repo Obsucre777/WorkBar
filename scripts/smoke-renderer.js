@@ -28,6 +28,13 @@ if (!browser) {
 
 function bootstrap() {
   const listeners = new Map();
+  const RealDate = Date;
+  const clock = window.parent.__fixtureClock || [12, 0, 0];
+  let now = new RealDate().setHours(...clock, 0);
+  window.Date = class extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [now])); }
+    static now() { return now; }
+  };
   const date = new Date();
   const today = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   const countdown = (id, spent_sec = 60) => ({ id, title: id, timer: 'down', est_min: 5, spent_sec, running: true });
@@ -61,28 +68,72 @@ function bootstrap() {
     if (scene === 'colour-pinned') plan.tasks = [idle('a', '23:57'), idle('b', '23:58'), idle('c', '23:59'), stopwatch('d')];
   }
   if (scene === 'done-upcoming' || scene === 'done-upcoming-only') {
-    // Keep scheduled tasks in the future even when this script runs at night.
-    window.Date = class extends Date { getHours() { return 12; } getMinutes() { return 0; } };
     plan.current_id = null;
     plan.tasks = [idle('a', '23:57'), idle('b', '23:58')];
     if (scene === 'done-upcoming') plan.tasks.push({ ...countdown('c', 79), est_min: 30 });
   }
   if (scene === 'done-empty') { plan.current_id = null; plan.tasks = []; }
   if (scene === 'done-complete') { plan.current_id = null; plan.tasks = [{ ...countdown('a'), done: true, running: false }]; }
+  if (scene === 'independent-idle' || scene === 'independent-legacy' || scene === 'independent-visibility') {
+    plan.current_id = scene === 'independent-idle' ? null : 'b';
+    plan.tasks = ['a', 'b', 'c'].map((id) => idle(id));
+    if (scene === 'independent-visibility') { plan.tasks.push(idle('d')); plan.current_id = 'd'; }
+  }
+  if (scene === 'independent-equal' || scene === 'independent-complete') {
+    plan.current_id = scene === 'independent-equal' ? 'b' : 'a';
+    plan.tasks = ['a', 'b', 'c'].map((id) => countdown(id));
+  }
+  if (scene === 'independent-schedule') {
+    plan.current_id = 'c';
+    plan.tasks = [
+      { ...idle('a', '16:00'), end: '16:30' },
+      idle('b', '16:00'),
+      { ...stopwatch('c'), start: '17:00', end: '17:30' },
+    ];
+  }
+  if (scene === 'independent-paused') {
+    plan.current_id = 'a';
+    plan.tasks = [
+      { ...idle('a', '11:00'), end: '13:00', paused: true },
+      { ...idle('b', '11:00'), end: '13:00', spent_sec: 30 },
+      { ...stopwatch('c'), start: '14:00', end: '15:00', spent_sec: 0 },
+    ];
+  }
   const clone = (value) => JSON.parse(JSON.stringify(value));
+  let blockSaves = false;
+  const pendingSaves = [];
+  if (window.parent.__fixturePlan) plan = clone(window.parent.__fixturePlan);
   async function emit(name, payload) {
     for (const handler of listeners.get(name) || []) await handler({ payload });
   }
   window.__smoke = {
     getPlan: () => clone(plan),
+    holdSaves: () => { blockSaves = true; },
+    pendingSaves: () => pendingSaves.length,
+    releaseSave() {
+      const pending = pendingSaves.shift();
+      if (pending) { plan = clone(pending.plan); pending.resolve(); }
+    },
+    releaseSaves() {
+      blockSaves = false;
+      while (pendingSaves.length) this.releaseSave();
+    },
     async setPlan(next) { plan = clone(next); await emit('plan-changed'); },
+    async setClock(hours, minutes, seconds = 0) {
+      now = new RealDate(now).setHours(hours, minutes, seconds, 0);
+      await emit('clock-tick');
+    },
     emit,
   };
   window.__TAURI__ = {
     core: {
       async invoke(command, args) {
         if (command === 'get_plan') return clone(plan);
-        if (command === 'save_plan') { plan = clone(args.plan); return; }
+        if (command === 'save_plan') {
+          if (blockSaves) await new Promise((resolve) => pendingSaves.push({ plan: clone(args.plan), resolve }));
+          else plan = clone(args.plan);
+          return;
+        }
         if (command === 'trace_js') return;
         if (command === 'set_collapsed') {
           queueMicrotask(() => emit('bar-resized', args.collapsed));
@@ -112,8 +163,10 @@ async function runInBrowser() {
     checks.push({ name: message, ok: Boolean(condition) });
     if (!condition) throw new Error(message);
   };
-  async function fixture(scene) {
+  async function fixture(scene, restoredPlan = null, clock = null) {
     if (frame) frame.remove();
+    window.__fixturePlan = restoredPlan;
+    window.__fixtureClock = clock;
     frame = document.createElement('iframe');
     frame.style.cssText = 'width:980px;height:100px;border:0';
     const loaded = new Promise((resolve, reject) => {
@@ -176,8 +229,125 @@ async function runInBrowser() {
     assert(`${label}: done button is visible`, Number(style.opacity) > 0);
     assert(`${label}: done button accepts pointer input`, style.pointerEvents !== 'none');
   }
+  async function settled() { for (let i = 0; i < 8; i += 1) await Promise.resolve(); }
+  function idleState(view, id, label) {
+    const unit = view.unit(id);
+    assert(`${label}: task stays idle`, unit.querySelector('.ring').dataset.mode === 'idle');
+    assert(`${label}: no artificial elapsed time`, unit.querySelector('.elapsed').hidden);
+    assert(`${label}: unstarted wording`, unit.querySelector('.estimate').textContent === '待开始');
+    usableDone(view, id, label);
+  }
+  function siblingsUnchanged(view, selected, label) {
+    const siblings = view.win.__smoke.getPlan().tasks.filter((task) => task.id !== selected);
+    assert(`${label}: sibling state and elapsed time remain untouched`, siblings.every((task) =>
+      !task.running && !task.paused && !task.done && task.spent_sec === 0));
+  }
   try {
-    let view = await fixture('base');
+    let view = await fixture('independent-idle');
+    for (const id of ['a', 'b', 'c']) idleState(view, id, `idle position ${id}`);
+    view = await fixture('independent-legacy');
+    for (const id of ['a', 'b', 'c']) idleState(view, id, `legacy selection position ${id}`);
+    assert('legacy current id does not highlight a unit', !view.doc.querySelector('.unit.current'));
+    view = await fixture('independent-visibility');
+    assert('legacy current id cannot displace an equally idle task', Boolean(view.unit('a') && view.unit('b') && view.unit('c')) && !view.unit('d'));
+
+    for (const id of ['a', 'b', 'c']) {
+      view = await fixture('independent-idle');
+      view.unit(id).querySelector('.ring').click();
+      await settled();
+      let task = view.win.__smoke.getPlan().tasks.find((item) => item.id === id);
+      assert(`start position ${id}: only selected task starts`, task.running && !task.paused);
+      siblingsUnchanged(view, id, `start position ${id}`);
+      view.unit(id).querySelector('.ring').click();
+      await settled();
+      task = view.win.__smoke.getPlan().tasks.find((item) => item.id === id);
+      assert(`pause position ${id}: explicit zero-second pause is persisted`, !task.running && task.paused && task.spent_sec === 0);
+      assert(`pause position ${id}: paused appearance does not require elapsed time`, view.unit(id).querySelector('.ring').dataset.mode === 'paused');
+      siblingsUnchanged(view, id, `pause position ${id}`);
+      const saved = view.win.__smoke.getPlan();
+      view = await fixture('restored', saved);
+      assert(`reload position ${id}: explicit pause survives reload`, view.unit(id).querySelector('.ring').dataset.mode === 'paused');
+      view.unit(id).querySelector('.ring').click();
+      await settled();
+      await view.win.__smoke.setClock(12, 0, 5);
+      await settled();
+      assert(`resume position ${id}: elapsed time advances independently`, view.unit(id).querySelector('.elapsed').textContent === '00:05');
+      siblingsUnchanged(view, id, `resume position ${id}`);
+      view.unit(id).querySelector('.done').click();
+      assert(`complete position ${id}: task is removed without a special delay`, !view.unit(id));
+      await settled();
+      task = view.win.__smoke.getPlan().tasks.find((item) => item.id === id);
+      assert(`complete position ${id}: selected task stops and completes`, task.done && !task.running && !task.paused);
+      siblingsUnchanged(view, id, `complete position ${id}`);
+      for (const sibling of ['a', 'b', 'c'].filter((other) => other !== id)) idleState(view, sibling, `after completing ${id}: ${sibling}`);
+    }
+
+    view = await fixture('independent-equal');
+    assert('equally running strips have equal full brightness', [...view.doc.querySelectorAll('.slim-seg')].every((node) => view.win.getComputedStyle(node).opacity === '1'));
+    assert('legacy selection cannot highlight a strip', !view.doc.querySelector('.slim-seg.current'));
+    for (const id of ['a', 'c']) { view.unit(id).querySelector('.ring').click(); await settled(); }
+    assert('equally paused strips have equal dim brightness', ['a', 'c'].every((id) => view.win.getComputedStyle(view.doc.querySelector(`.slim-seg[data-id="${id}"]`)).opacity === '0.45'));
+    assert('pausing siblings preserves the running strip brightness', view.win.getComputedStyle(view.doc.querySelector('.slim-seg[data-id="b"]')).opacity === '1');
+
+    view = await fixture('independent-schedule', null, [15, 59, 59]);
+    assert('explicit running task is not stopped by its future schedule', view.unit('c').querySelector('.ring').dataset.mode === 'running');
+    assert('scheduled tasks wait for their own start time', ['a', 'b'].every((id) => view.unit(id).querySelector('.ring').dataset.mode === 'idle'));
+    await view.win.__smoke.setClock(16, 0);
+    assert('all due tasks start, including start-only task beside another running task', ['a', 'b', 'c'].every((id) => view.unit(id).querySelector('.ring').dataset.mode === 'running'));
+    view.unit('a').querySelector('.ring').click();
+    await settled();
+    await view.win.__smoke.setClock(16, 1);
+    assert('scheduled task stays paused during its time window', view.unit('a').querySelector('.ring').dataset.mode === 'paused');
+    assert('other due tasks keep running after one pauses', ['b', 'c'].every((id) => view.unit(id).querySelector('.ring').dataset.mode === 'running'));
+    const scheduledPause = view.win.__smoke.getPlan();
+    view = await fixture('restored', scheduledPause, [16, 2, 0]);
+    assert('scheduled pause survives reloading inside the active window', view.unit('a').querySelector('.ring').dataset.mode === 'paused');
+
+    view = await fixture('independent-paused');
+    assert('due zero-second explicit pause is not auto-started', view.unit('a').querySelector('.ring').dataset.mode === 'paused');
+    assert('previously timed legacy pause is not auto-started', view.unit('b').querySelector('.ring').dataset.mode === 'paused');
+    assert('AI running future task remains running', view.unit('c').querySelector('.ring').dataset.mode === 'running');
+    let remote = view.win.__smoke.getPlan();
+    remote.tasks.find((task) => task.id === 'c').running = false;
+    remote.tasks.find((task) => task.id === 'c').paused = true;
+    await view.win.__smoke.setPlan(remote);
+    assert('external explicit pause is not overwritten by local running state', view.unit('c').querySelector('.ring').dataset.mode === 'paused');
+    remote = view.win.__smoke.getPlan();
+    remote.tasks.find((task) => task.id === 'b').running = true;
+    remote.tasks.find((task) => task.id === 'b').paused = false;
+    await view.win.__smoke.setPlan(remote);
+    assert('external explicit start resumes only its target', view.unit('b').querySelector('.ring').dataset.mode === 'running' && ['a', 'c'].every((id) => view.unit(id).querySelector('.ring').dataset.mode === 'paused'));
+
+    view = await fixture('independent-complete');
+    view.unit('a').querySelector('.done').click();
+    assert('first completion removes its own unit immediately', !view.unit('a'));
+    view.unit('b').querySelector('.done').click();
+    assert('another task can complete immediately without a global busy lock', !view.unit('b'));
+    await settled();
+    const consecutive = view.win.__smoke.getPlan().tasks;
+    assert('consecutive completion saves both target tasks', consecutive.filter((task) => ['a', 'b'].includes(task.id)).every((task) => task.done && !task.running));
+    assert('consecutive completion does not stop the remaining task', consecutive.find((task) => task.id === 'c').running && !consecutive.find((task) => task.id === 'c').done);
+
+    view = await fixture('independent-idle');
+    const slow = view.win.__smoke;
+    slow.holdSaves();
+    view.unit('a').querySelector('.ring').click();
+    view.unit('b').querySelector('.ring').click();
+    view.unit('a').querySelector('.ring').click();
+    await slow.emit('plan-changed');
+    assert('slow save does not block independent task changes', view.unit('a').querySelector('.ring').dataset.mode === 'paused' && view.unit('b').querySelector('.ring').dataset.mode === 'running');
+    assert('only one save is in flight', slow.pendingSaves() === 1);
+    slow.releaseSave();
+    await settled();
+    await slow.emit('plan-changed');
+    assert('old save echo cannot restore stale task states', view.unit('a').querySelector('.ring').dataset.mode === 'paused' && view.unit('b').querySelector('.ring').dataset.mode === 'running');
+    slow.releaseSaves();
+    await settled();
+    const latest = slow.getPlan().tasks;
+    assert('queued save preserves the final pause and sibling start', latest.find((task) => task.id === 'a').paused && !latest.find((task) => task.id === 'a').running && latest.find((task) => task.id === 'b').running);
+    assert('queued save leaves idle siblings untouched', latest.find((task) => task.id === 'c').spent_sec === 0 && !latest.find((task) => task.id === 'c').running);
+
+    view = await fixture('base');
     overdue(view, 'a');
     normal(view, 'b');
     assert('countdown estimate drops the prefix and spaces', view.unit('a').querySelector('.estimate').textContent === '5分钟');
@@ -189,10 +359,10 @@ async function runInBrowser() {
     const before = gradients();
     assert('collapsed segments retain distinct identity gradients', before.length === 2 && before[0].includes('rgb(110, 123, 255)') && before[1].includes('rgb(34, 211, 238)'));
     view.doc.getElementById('collapse').click();
-    await Promise.resolve();
+    await settled();
     assert('collapse preserves segment colours', view.doc.getElementById('stage').classList.contains('collapsed') && JSON.stringify(gradients()) === JSON.stringify(before));
     view.doc.getElementById('slim').click();
-    await Promise.resolve();
+    await settled();
     assert('expand preserves segment colours', !view.doc.getElementById('stage').classList.contains('collapsed') && JSON.stringify(gradients()) === JSON.stringify(before));
     overdue(view, 'a');
     normal(view, 'b');
@@ -244,10 +414,10 @@ async function runInBrowser() {
     view = await fixture('colour-single');
     matchingStrip(view, 'b', 1, 'single running task after an unstarted task');
     view.doc.getElementById('collapse').click();
-    await Promise.resolve();
+    await settled();
     matchingStrip(view, 'b', 1, 'collapsed single running task');
     view.doc.getElementById('slim').click();
-    await Promise.resolve();
+    await settled();
     matchingStrip(view, 'b', 1, 'expanded single running task');
     view.unit('b').querySelector('.ring').click();
     matchingStrip(view, 'b', 1, 'paused cyan single task');
@@ -255,6 +425,7 @@ async function runInBrowser() {
     view.unit('b').querySelector('.ring').click();
     matchingStrip(view, 'b', 1, 'resumed cyan single task');
     normal(view, 'b');
+    await settled();
     let coloursPlan = view.win.__smoke.getPlan();
     coloursPlan.tasks.push({ id: 'c', title: 'c', timer: 'down', est_min: 5, spent_sec: 60, running: true });
     await view.win.__smoke.setPlan(coloursPlan);
@@ -285,7 +456,7 @@ async function runInBrowser() {
     view = await fixture('colour-third');
     matchingStrip(view, 'c', 2, 'single running task after two unstarted tasks');
     view = await fixture('colour-pinned');
-    matchingStrip(view, 'd', 2, 'current task kept visible beyond the first three pending tasks');
+    matchingStrip(view, 'd', 2, 'running task kept visible by the common started-task rule');
 
     view = await fixture('single');
     view.unit('a').querySelector('.ring').click();
@@ -297,20 +468,20 @@ async function runInBrowser() {
     assert('resumed overdue single strip becomes amber again', view.win.getComputedStyle(view.doc.getElementById('slimBar')).backgroundImage.includes('rgb(255, 178, 87)'));
 
     view = await fixture('done-upcoming');
-    assert('scheduled tasks keep the overall upcoming state', view.doc.getElementById('bar').dataset.state === 'upcoming');
+    assert('pending tasks use an aggregate state rather than one selected task state', view.doc.getElementById('bar').dataset.state === 'active');
     usableDone(view, 'c', 'running task beside future tasks');
     assert('future tasks do not dim the running progress ring', view.color('c', '.ring-fill', 'opacity') === '1');
     usableDone(view, 'a', 'future task beside a running task');
     view.unit('c').querySelector('.ring').click();
-    await Promise.resolve();
+    await settled();
     assert('background task pauses without selecting a future task', view.unit('c').querySelector('.ring').dataset.mode === 'paused');
     normal(view, 'c');
     usableDone(view, 'c', 'paused task beside future tasks');
     view.unit('c').querySelector('.ring').click();
-    await Promise.resolve();
+    await settled();
     normal(view, 'c');
     view.unit('c').querySelector('.done').click();
-    await Promise.resolve();
+    await settled();
     let finished = view.win.__smoke.getPlan();
     assert('done completes only the clicked running task and stops its timer', finished.tasks.find((task) => task.id === 'c').done && !finished.tasks.find((task) => task.id === 'c').running);
     assert('finishing a background task preserves future tasks', finished.tasks.filter((task) => task.id !== 'c').every((task) => !task.done && !task.running));
@@ -319,7 +490,7 @@ async function runInBrowser() {
     view = await fixture('done-upcoming-only');
     usableDone(view, 'a', 'future task without running tasks');
     view.unit('b').querySelector('.done').click();
-    await Promise.resolve();
+    await settled();
     finished = view.win.__smoke.getPlan();
     assert('future task can finish without starting either timer', finished.tasks.find((task) => task.id === 'b').done && finished.tasks.every((task) => !task.running));
     assert('completing a future task leaves the other pending', !finished.tasks.find((task) => task.id === 'a').done);

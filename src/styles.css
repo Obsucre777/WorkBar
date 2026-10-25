@@ -114,11 +114,6 @@ body {
   }
 }
 
-/* completion flash */
-.bar.flash {
-  animation: bar-in 0.42s var(--ease-out) backwards, flash 0.62s ease-out;
-}
-
 /* ------------------------------------------------------- task units */
 
 .units {
@@ -136,7 +131,7 @@ body {
   padding-right: 6px;
 }
 
-/* parallel timers: one full "current task" unit each, divided by a separator */
+/* parallel timers: identical task controls, divided by a separator */
 .unit + .unit {
   margin-left: 10px;
   padding-left: 14px;
@@ -251,27 +246,6 @@ body {
 .units.multi .unit .done svg {
   width: 11px;
   height: 11px;
-}
-
-@keyframes flash {
-  0% {
-    box-shadow:
-      0 2px 7px -3px rgba(0, 0, 0, 0.62),
-      0 1px 3px -1px rgba(0, 0, 0, 0.42),
-      inset 0 0 0 1px rgba(110, 231, 183, 0);
-  }
-  35% {
-    box-shadow:
-      0 3px 9px -4px rgba(0, 0, 0, 0.55),
-      0 0 8px rgba(110, 231, 183, 0.22),
-      inset 0 0 0 1px rgba(110, 231, 183, 0.35);
-  }
-  100% {
-    box-shadow:
-      0 2px 7px -3px rgba(0, 0, 0, 0.62),
-      0 1px 3px -1px rgba(0, 0, 0, 0.42),
-      inset 0 0 0 1px rgba(110, 231, 183, 0);
-  }
 }
 
 /* ------------------------------------------------------------------ ring */
@@ -657,20 +631,12 @@ body {
   transition:
     transform 1s linear,
     opacity 0.3s ease;
-  opacity: 0.55;
-}
-
-.slim-seg.current {
   opacity: 1;
 }
 
 /* brightness encodes state; colour still identifies the task */
 .slim-seg[data-state="paused"] {
-  opacity: 0.4;
-}
-
-.slim-seg[data-state="paused"].current {
-  opacity: 0.55;
+  opacity: 0.45;
 }
 
 /* every started task gets an equal share of the line regardless of timer
@@ -833,17 +799,6 @@ body {
 .bar.complete .ring-fill {
   stroke: var(--ok);
   filter: drop-shadow(0 0 6px rgba(110, 231, 183, 0.45));
-}
-
-.bar.leaving .now {
-  animation: now-out 0.24s var(--ease-out) both;
-}
-
-@keyframes now-out {
-  to {
-    opacity: 0;
-    transform: translateX(-10px);
-  }
 }
 
 /* keep text crisp on high-dpi */

@@ -145,7 +145,7 @@ fn initialize_result(params: &Value) -> Value {
             "title": "Workbar",
             "version": SERVER_VERSION
         },
-        "instructions": "Workbar is the user's always-on-top floating work bar on Windows. It shows exactly one current task with a timer ring, plus the next few tasks. The bar is the single source of truth for today's plan. \
+        "instructions": "Workbar is the user's always-on-top floating work bar on Windows. Each task has its own independent timer and state; no task has priority because of its position or a current-task marker. The bar is the single source of truth for today's plan. \
 \n\nWhen to call tools (do it proactively, do not just print a plan in chat): whenever the user talks about today's plan, their tasks, what to do next, finishing something, moving/renaming a task, or asks for a schedule. \
 \n\nWorkflow rules:\n\
 1. Call workbar_get_today before reading or editing so you reuse existing task ids and see which task the bar is showing.\n\
@@ -153,8 +153,8 @@ fn initialize_result(params: &Value) -> Value {
 3. workbar_add_tasks appends; workbar_update_task moves/renames one task; prefer these over re-creating the day.\n\
 4. Times are local HH:mm (24h). One task = one short piece of work; titles must be short (<= 14 Chinese chars / ~40 latin chars) because the bar is tiny; prefer 3-8 tasks per day. A task with an estimate or a time window counts down against it; a task with neither is an open-ended stopwatch (timer 'up', ring laps once per hour).\n\
 5. After a write, reply with one short confirmation line. The bar updates in under a second; there is no need to echo the whole plan.\n\
-6. Only one task is \"current\" (what the bar shows), but several tasks may run in parallel: set running=true on another task to keep a background timer going (the collapsed line then shows one segment per running task).\n\
-7. Show your work on the bar. Every time the user gives you a job to do — write/fix/check/research/summarize/build something, even a quick \"is X configured?\" check — first summarize it into a 3-8 character title and call workbar_start_work with that title: the bar immediately shows a running stopwatch for the job. When the job is finished, call workbar_finish_work so the task is marked done. Starting a new job marks your previous unfinished session done, so no stale entry keeps counting. Skip this only for pure chit-chat or clarifying questions, and never use workbar_add_tasks for your own work sessions."
+6. Tasks may run in parallel. Starting, pausing, or finishing one task never changes another task. Set running=true to start a task and running=false to explicitly pause it.\n\
+7. Show your work on the bar. Every time the user gives you a job to do — write/fix/check/research/summarize/build something, even a quick \"is X configured?\" check — first summarize it into a 3-8 character title and call workbar_start_work with that title: the bar immediately shows a running stopwatch for the job. When the job is finished, call workbar_finish_work with that task's id so only that task is marked done. Starting another job leaves existing sessions unchanged. Skip this only for pure chit-chat or clarifying questions, and never use workbar_add_tasks for your own work sessions."
     })
 }
 
@@ -186,6 +186,14 @@ fn task_schema() -> Value {
                 "type": "string",
                 "enum": ["down", "up"],
                 "description": "Timer mode. 'down' counts down against est_min (default when an estimate or a time window exists); 'up' is a stopwatch with no target (use it for open-ended work like 'write the report until it's done')."
+            },
+            "running": {
+                "type": "boolean",
+                "description": "Start this new task immediately, independently of every other task. Defaults to false."
+            },
+            "paused": {
+                "type": "boolean",
+                "description": "Create an explicitly paused task that its schedule must not automatically start. Ignored when running is true."
             },
             "note": {
                 "type": "string",
@@ -231,7 +239,7 @@ fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "id": {
                         "type": "string",
-                        "description": "Task id; defaults to the latest running AI work session of this client."
+                        "description": "Task id. May be omitted only if this client has exactly one unfinished session. Required when multiple sessions are open."
                     }
                 },
                 "additionalProperties": false
@@ -267,7 +275,7 @@ fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "workbar_update_task",
             "title": "Update a task",
-            "description": "Change one task in place: title, time window, estimate, timer mode, note, running state, or done state. Use the id from workbar_get_today. Set running=true to keep a second timer going in parallel without changing what the bar shows.",
+            "description": "Change one task in place: title, time window, estimate, timer mode, note, running state, or done state. Use the id from workbar_get_today. Set running=true to start only this timer; running=false explicitly pauses it, including after a restart. Other tasks keep their own states.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -282,7 +290,7 @@ fn tool_definitions() -> Vec<Value> {
                         "description": "Switch the timer mode for this task. Ignored by 'up' tasks."
                     },
                     "note": { "type": ["string", "null"] },
-                    "running": { "type": "boolean", "description": "Start or stop this task's timer without changing which task the bar shows." },
+                    "running": { "type": "boolean", "description": "Start or explicitly pause only this task's timer." },
                     "done": { "type": "boolean" }
                 },
                 "required": ["id"],
@@ -291,8 +299,8 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "workbar_set_current",
-            "title": "Point the bar at a task",
-            "description": "Make a specific task the one shown on the bar right now.",
+            "title": "Start one task (compatibility tool)",
+            "description": "Compatibility alias: start only the specified task. Tasks no longer have a unique current-task identity; other tasks are unchanged.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "id": { "type": "string" } },
@@ -303,7 +311,7 @@ fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "workbar_complete_task",
             "title": "Mark a task done",
-            "description": "Mark one task as finished. The bar will automatically move on to the next task.",
+            "description": "Mark only the specified task as finished and stop its timer. Other tasks keep their own states.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "id": { "type": "string" } },
@@ -501,20 +509,19 @@ fn tool_update_task(args: &Value) -> Value {
         if let Some(value) = args.get("note") {
             task.note = optional_text(value);
         }
-        if let Some(running) = args.get("running").and_then(Value::as_bool) {
-            task.running = running && !task.done;
-        }
         if let Some(done) = args.get("done").and_then(Value::as_bool) {
             task.done = done;
             if done {
                 task.running = false;
+                task.paused = false;
             }
+        }
+        if let Some(running) = args.get("running").and_then(Value::as_bool) {
+            task.running = running && !task.done;
+            task.paused = !running && !task.done;
         }
 
         normalize_task(task)?;
-        if task.done && plan.current_id.as_deref() == Some(task.id.as_str()) {
-            plan.current_id = None;
-        }
         Ok(())
     });
     match result {
@@ -529,13 +536,14 @@ fn tool_set_current(args: &Value) -> Value {
         Err(err) => return err,
     };
     match workbar_core::update(|plan| {
-        if !plan.tasks.iter().any(|task| task.id == id) {
-            return Err(format!("找不到任务 {id}"));
-        }
-        plan.current_id = Some(id.clone());
+        let task = plan.tasks.iter_mut().find(|task| task.id == id)
+            .ok_or_else(|| format!("找不到任务 {id}"))?;
+        if task.done { return Err("已完成的任务不能开始，请先将 done 改为 false".into()); }
+        task.running = true;
+        task.paused = false;
         Ok(())
     }) {
-        Ok(plan) => render(&plan, "已切换当前任务。"),
+        Ok(plan) => render(&plan, "已启动指定任务，其他任务保持不变。"),
         Err(err) => error_result(err),
     }
 }
@@ -553,9 +561,7 @@ fn tool_complete_task(args: &Value) -> Value {
             .ok_or_else(|| format!("找不到任务 {id}"))?;
         task.done = true;
         task.running = false;
-        if plan.current_id.as_deref() == Some(id.as_str()) {
-            plan.current_id = None;
-        }
+        task.paused = false;
         Ok(())
     }) {
         Ok(plan) => render(&plan, "已完成一项。"),
@@ -573,9 +579,6 @@ fn tool_remove_task(args: &Value) -> Value {
         plan.tasks.retain(|task| task.id != id);
         if plan.tasks.len() == before {
             return Err(format!("找不到任务 {id}"));
-        }
-        if plan.current_id.as_deref() == Some(id.as_str()) {
-            plan.current_id = None;
         }
         Ok(())
     }) {
@@ -617,15 +620,6 @@ fn tool_start_work(args: &Value) -> Value {
     let source = client_name();
 
     let result = workbar_core::update(|plan| {
-        // a work session from the same client that was left open is marked done
-        // when a new one starts, so the bar only shows the current piece of work
-        let source_key = source.clone();
-        for task in plan.tasks.iter_mut() {
-            if task.source.as_deref() == Some(source_key.as_str()) && !task.done {
-                task.done = true;
-                task.running = false;
-            }
-        }
         let mut task = Task {
             title,
             note,
@@ -636,7 +630,6 @@ fn tool_start_work(args: &Value) -> Value {
         };
         normalize_task(&mut task)?;
         plan.tasks.push(task.clone());
-        plan.current_id = Some(task.id);
         Ok(())
     });
     match result {
@@ -662,24 +655,19 @@ fn tool_finish_work(args: &Value) -> Value {
                 .position(|task| task.id == id)
                 .ok_or_else(|| format!("找不到任务 {id}"))?
         } else {
-            // prefer a session started by this client, otherwise the latest one
-            plan.tasks
-                .iter()
-                .rposition(|task| task.source.as_deref() == Some(source.as_str()) && !task.done)
-                .or_else(|| {
-                    plan.tasks
-                        .iter()
-                        .rposition(|task| task.source.is_some() && !task.done)
-                })
-                .ok_or_else(|| "当前没有正在进行的 AI 工作会话".to_string())?
+            let matches: Vec<_> = plan.tasks.iter().enumerate()
+                .filter(|(_, task)| task.source.as_deref() == Some(source.as_str()) && !task.done)
+                .map(|(index, _)| index).collect();
+            match matches.as_slice() {
+                [index] => *index,
+                [] => return Err("本客户端没有未完成的 AI 工作会话，请提供要完成的任务 id".into()),
+                _ => return Err("本客户端有多个未完成的 AI 工作会话，请提供要完成的任务 id".into()),
+            }
         };
         let task = &mut plan.tasks[index];
         task.done = true;
         task.running = false;
-        let finished_id = task.id.clone();
-        if plan.current_id.as_deref() == Some(finished_id.as_str()) {
-            plan.current_id = None;
-        }
+        task.paused = false;
         Ok(())
     });
     match result {
@@ -715,4 +703,83 @@ fn optional_boundary(value: &Value, field: &str) -> Result<Option<String>, Strin
         return Err(format!("{field} 必须是 HH:mm 格式，收到：{raw}"));
     }
     Ok(Some(raw))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_operations_keep_other_tasks_independent() {
+        let directory = std::env::temp_dir().join(format!("workbar-independent-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs_create_directory(&directory);
+        let previous = std::env::var_os("WORKBAR_DATA_DIR");
+        std::env::set_var("WORKBAR_DATA_DIR", &directory);
+        struct Restore { previous: Option<std::ffi::OsString>, directory: std::path::PathBuf }
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                if let Some(value) = &self.previous { std::env::set_var("WORKBAR_DATA_DIR", value); }
+                else { std::env::remove_var("WORKBAR_DATA_DIR"); }
+                let _ = std::fs::remove_file(self.directory.join("plan.json"));
+                let _ = std::fs::remove_dir(&self.directory);
+            }
+        }
+        let _restore = Restore { previous, directory };
+        remember_client(&json!({ "clientInfo": { "name": "independence-test" } }));
+        let ok = |value: Value| { assert_ne!(value["isError"], true, "{value}"); };
+        ok(tool_add_tasks(&json!({ "tasks": [
+            { "id": "a", "title": "a", "est_min": 30, "running": true },
+            { "id": "b", "title": "b", "est_min": 30, "paused": true },
+            { "id": "c", "title": "c", "timer": "up" }
+        ] })));
+        ok(tool_set_current(&json!({ "id": "c" })));
+        let plan = workbar_core::load().unwrap();
+        assert!(plan.current_id.is_none());
+        assert!(plan.tasks.iter().find(|task| task.id == "a").unwrap().running);
+        assert!(plan.tasks.iter().find(|task| task.id == "b").unwrap().paused);
+        assert!(plan.tasks.iter().find(|task| task.id == "c").unwrap().running);
+
+        ok(tool_update_task(&json!({ "id": "c", "running": false })));
+        let plan = workbar_core::load().unwrap();
+        let paused = plan.tasks.iter().find(|task| task.id == "c").unwrap();
+        assert!(paused.paused && !paused.running && paused.spent_sec == 0);
+        assert!(plan.tasks.iter().find(|task| task.id == "a").unwrap().running);
+        ok(tool_complete_task(&json!({ "id": "c" })));
+        ok(tool_update_task(&json!({ "id": "c", "done": false, "running": true })));
+        assert!(workbar_core::load().unwrap().tasks.iter().find(|task| task.id == "c").unwrap().running);
+
+        ok(tool_start_work(&json!({ "title": "first independent session" })));
+        let first = workbar_core::load().unwrap().tasks.iter().find(|task| task.title == "first independent session").unwrap().id.clone();
+        ok(tool_start_work(&json!({ "title": "second independent session" })));
+        let second = workbar_core::load().unwrap().tasks.iter().find(|task| task.title == "second independent session").unwrap().id.clone();
+        let plan = workbar_core::load().unwrap();
+        let first_task = plan.tasks.iter().find(|task| task.id == first).unwrap();
+        assert!(first_task.running && !first_task.done);
+        assert!(plan.tasks.iter().find(|task| task.id == "a").unwrap().running);
+        assert_eq!(tool_finish_work(&json!({}))["isError"], true);
+        assert!(workbar_core::load().unwrap().tasks.iter().filter(|task| task.id == first || task.id == second).all(|task| task.running && !task.done));
+        ok(tool_finish_work(&json!({ "id": second })));
+        let plan = workbar_core::load().unwrap();
+        assert!(plan.tasks.iter().find(|task| task.id == second).unwrap().done);
+        assert!(!plan.tasks.iter().find(|task| task.id == first).unwrap().done);
+        ok(tool_finish_work(&json!({})));
+        assert!(workbar_core::load().unwrap().tasks.iter().find(|task| task.id == first).unwrap().done);
+
+        ok(tool_add_tasks(&json!({ "tasks": [
+            { "id": "foreign", "title": "another client's work", "timer": "up", "running": true, "source": "another-client" }
+        ] })));
+        assert_eq!(tool_finish_work(&json!({}))["isError"], true);
+        assert!(workbar_core::load().unwrap().tasks.iter().find(|task| task.id == "foreign").unwrap().running);
+
+        ok(tool_start_work(&json!({ "title": "open one" })));
+        ok(tool_start_work(&json!({ "title": "open two" })));
+        assert_eq!(tool_finish_work(&json!({}))["isError"], true);
+        let plan = workbar_core::load().unwrap();
+        assert_eq!(plan.tasks.iter().filter(|task| task.source.as_deref() == Some("independence-test") && !task.done).count(), 2);
+    }
+
+    fn fs_create_directory(path: &std::path::Path) {
+        std::fs::create_dir(path).unwrap();
+    }
 }

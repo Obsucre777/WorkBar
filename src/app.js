@@ -19,10 +19,9 @@
     slim: $("slim"),
     slimBar: $("slimBar"),
     slimLine: $("slimLine"),
-    burst: $("burst"),
   };
 
-  let plan = { date: "", current_id: null, tasks: [] };
+  let plan = { date: "", tasks: [] };
   let lastSnapshot = "";
   let lastTickAt = Date.now();
   // Fractional seconds waiting to be written into spent_sec, per running task.
@@ -33,11 +32,9 @@
   let unitNodes = [];
   let sinceSave = 0;
   let saving = false;
+  let saveQueued = false;
+  let externalQueued = false;
   let collapsed = false;
-  let busy = false;
-
-  /** Task ids the user explicitly paused (runtime only). */
-  const paused = new Set();
 
   // ------------------------------------------------------------------ time
 
@@ -107,26 +104,30 @@
 
   // ------------------------------------------------------------------ view
 
+  function hasStarted(task) {
+    return !!task.running || !!task.paused || Number(task.spent_sec) > 0;
+  }
+
+  function compareTasks(a, b) {
+    const sa = hhmmToMin(a.start);
+    const sb = hhmmToMin(b.start);
+    if (sa === null && sb === null) return a.id.localeCompare(b.id);
+    if (sa === null) return 1;
+    if (sb === null) return -1;
+    return sa - sb || a.id.localeCompare(b.id);
+  }
+
   function computeView() {
     const tasks = plan.tasks || [];
     const pending = tasks.filter((t) => !t.done);
-    const today = todayString();
-    const fresh = plan.date === today;
-    const now = nowMinutes();
-
     const view = {
       state: "active",
-      task: null,
-      running: false,
-      paused: false,
-      overdueMin: 0,
-      startsIn: 0,
       doneCount: tasks.filter((t) => t.done).length,
       total: tasks.length,
-      pendingCount: tasks.filter((t) => !t.done).length,
+      pendingCount: pending.length,
     };
 
-    if (!fresh || tasks.length === 0) {
+    if (plan.date !== todayString() || tasks.length === 0) {
       view.state = "empty";
       return view;
     }
@@ -136,67 +137,20 @@
       return view;
     }
 
-    let current = null;
-    let fromCurrentId = false;
-    if (plan.current_id) {
-      current = pending.find((t) => t.id === plan.current_id) || null;
-      fromCurrentId = !!current;
-    }
-    let reachedByClock = false;
-    if (!current) {
-      current = pending.find((t) => {
-        const start = hhmmToMin(t.start);
-        const end = hhmmToMin(t.end);
-        return start !== null && end !== null && now >= start && now < end;
-      });
-      reachedByClock = !!current;
-    }
-    if (!current) {
-      const upcoming = pending
-        .filter((t) => {
-          const start = hhmmToMin(t.start);
-          return start !== null && start > now;
-        })
-        .sort((a, b) => hhmmToMin(a.start) - hhmmToMin(b.start));
-      if (upcoming.length) {
-        current = upcoming[0];
-        view.state = "upcoming";
-        view.startsIn = hhmmToMin(current.start) - now;
-      } else {
-        current = pending[0];
+    // Every scheduled task starts independently. Explicit running/paused state
+    // wins over the clock, including a pause made before the first second.
+    const now = nowMinutes();
+    let startedByClock = false;
+    for (const task of pending) {
+      if (hasStarted(task)) continue;
+      const start = hhmmToMin(task.start);
+      const end = hhmmToMin(task.end);
+      if (start !== null && now >= start && (end === null || now < end)) {
+        task.running = true;
+        startedByClock = true;
       }
     }
-
-    if (!current) {
-      view.state = "complete";
-      return view;
-    }
-
-    // Auto-start only when the clock reached the task's window or something
-    // explicitly pointed the bar at it. The old blanket rule also started the
-    // "first pending task" fallback pick, which surprise-started a task the
-    // moment it was added while the previous current task had just finished.
-    if (
-      (fromCurrentId || reachedByClock) &&
-      view.state === "active" &&
-      !current.running &&
-      !paused.has(current.id)
-    ) {
-      current.running = true;
-    }
-    if (current.running && view.state === "upcoming") {
-      current.running = false;
-    }
-
-    view.task = current;
-    view.running = !!current.running;
-    view.paused = paused.has(current.id);
-    if (view.paused) view.state = "paused";
-
-    // Only a countdown with a real estimate can go overdue.
-    const estSec = Math.max(0, Number(current.est_min) || 0) * 60;
-    const spent = Number(current.spent_sec) || 0;
-    view.overdueMin = estSec > 0 && spent > estSec ? Math.floor((spent - estSec) / 60) : 0;
+    if (startedByClock) saveNow();
 
     return view;
   }
@@ -218,7 +172,7 @@
     node.textContent = text;
   }
 
-  /** Build (or reuse) one "current task" unit per engaged task. */
+  /** Build (or reuse) the same controls for every displayed task. */
   function ensureUnits(count) {
     if (unitNodes.length === count) return unitNodes;
     el.units.replaceChildren();
@@ -273,30 +227,17 @@
     return unitNodes;
   }
 
-  /** One expanded unit per task, in stable start-time order so clicking a task
-   *  never makes it swap places with another one. The current task is always
-   *  kept visible even if it starts later than the first three. */
-  function computeUnits(view) {
-    const pending = (plan.tasks || [])
-      .filter((task) => !task.done)
-      .sort((a, b) => {
-        const sa = hhmmToMin(a.start);
-        const sb = hhmmToMin(b.start);
-        if (sa === null && sb === null) return a.id.localeCompare(b.id);
-        if (sa === null) return 1;
-        if (sb === null) return -1;
-        return sa - sb;
-      });
-    const shown = pending.slice(0, 3);
-    const current = view.task;
-    if (current && !shown.some((task) => task.id === current.id)) {
-      shown.pop();
-      shown.push(current);
-    }
-    return shown;
+  /** Fit started tasks first, then waiting tasks, using the same rule for all.
+   *  Keep the selected tasks in stable time/id order, including across pauses. */
+  function computeUnits() {
+    const pending = (plan.tasks || []).filter((task) => !task.done).sort(compareTasks);
+    return [
+      ...pending.filter(hasStarted),
+      ...pending.filter((task) => !hasStarted(task)),
+    ].slice(0, 3).sort(compareTasks);
   }
 
-  function unitTarget(view, task, isCurrent) {
+  function unitTarget(view, task) {
     if (!task) {
       const complete = view.state === "complete";
       return {
@@ -321,10 +262,7 @@
     const progress = up
       ? (spent % 3600) / 3600
       : Math.min(1, Math.max(0, spent / est));
-    const started =
-      !!task.running ||
-      spent > 0 ||
-      (isCurrent && (view.state === "paused" || view.state === "active"));
+    const started = hasStarted(task);
     const startMin = hhmmToMin(task.start);
     const now = nowMinutes();
 
@@ -373,19 +311,16 @@
   }
 
   function renderUnits(view, immediate) {
-    const list = computeUnits(view);
+    const list = computeUnits();
     const nodes = ensureUnits(Math.max(1, list.length));
     el.units.classList.toggle("multi", nodes.length > 1);
-    const currentId = view.task ? view.task.id : null;
     nodes.forEach((refs, index) => {
       const task = list[index] || null;
-      const isCurrent = !!task && task.id === currentId;
       refs.taskId = task ? task.id : null;
-      refs.root.classList.toggle("current", isCurrent);
       refs.root.classList.toggle("stacked", nodes.length > 1);
       refs.root.classList.toggle("idle", !task);
       refs.root.dataset.id = task ? task.id : "";
-      const target = unitTarget(view, task, isCurrent);
+      const target = unitTarget(view, task);
       refs.root.classList.toggle("overdue", target.overdue);
       if (refs.titleText !== target.title) {
         refs.titleText = target.title;
@@ -431,16 +366,6 @@
       ? `还有：${hidden.map((t) => `${t.title}${t.start ? ` ${t.start}` : ""}`).join("、")}`
       : "";
 
-    // collapsed line state: colours/opacity for the single-task line.
-    // "none" / "complete" = no work left -> the strip stays clickable but shows nothing.
-    let lineState = "active";
-    if (view.state === "complete") lineState = "complete";
-    else if (view.state === "empty") lineState = "none";
-    else if (view.state === "upcoming") lineState = "idle";
-    else if (view.overdueMin > 0) lineState = "overdue";
-    else if (view.state === "paused") lineState = "paused";
-    el.stage.dataset.lineState = lineState;
-
     renderSlim(view, shownUnits);
 
     return view;
@@ -453,27 +378,15 @@
   function renderSlim(view, shownUnits) {
     // Reuse expanded slot colours even when unstarted tasks are omitted here.
     const colorById = new Map(shownUnits.map((task, index) => [task.id, index]));
-    const currentId = view.task ? view.task.id : null;
-    const started = (plan.tasks || [])
-      .filter((task) => !task.done && (task.running || Number(task.spent_sec) > 0))
-      .map((task) => ({ task, start: hhmmToMin(task.start) }))
-      .sort((a, b) => {
-        if (a.start === null && b.start === null) return a.task.id.localeCompare(b.task.id);
-        if (a.start === null) return 1;
-        if (b.start === null) return -1;
-        return a.start - b.start;
-      })
-      .map((entry) => entry.task)
-      .slice(0, 3);
+    const started = shownUnits.filter(hasStarted);
 
     const multi = started.length > 1;
-    // Keep the single bar mounted even with nothing started: the "none" /
-    // "complete" line states style it as a dim neutral / green line, so the
-    // collapsed strip always stays visible and clickable.
+    // Keep the strip clickable even when no task has started and no line is drawn.
     el.slimBar.hidden = multi;
     el.slimLine.hidden = !multi;
 
     if (started.length === 0) {
+      el.stage.dataset.lineState = view.state === "complete" ? "complete" : "none";
       slimSignature = "";
       el.slimLine.replaceChildren();
       el.slimBar.classList.remove("up");
@@ -487,8 +400,8 @@
       el.slimLine.replaceChildren();
       const task = started[0];
       const up = timerModeOf(task) === "up";
-      const target = unitTarget(view, task, task.id === currentId);
-      el.slimBar.dataset.color = String(colorById.get(task.id) ?? 0);
+      const target = unitTarget(view, task);
+      el.slimBar.dataset.color = String(colorById.get(task.id));
       el.stage.dataset.lineState = target.overdue ? "overdue" : task.running ? "active" : "paused";
       el.slimBar.classList.toggle("up", up);
       // a stopwatch fills the whole line (CSS drops the retraction transform);
@@ -504,6 +417,7 @@
     }
 
     el.slimBar.classList.remove("up");
+    el.stage.dataset.lineState = "active";
     const signature = started.map((task) => task.id).join("|");
     if (signature !== slimSignature) {
       slimSignature = signature;
@@ -516,10 +430,10 @@
       });
     }
 
-    Array.from(el.slimLine.children).forEach((seg, index) => {
+    Array.from(el.slimLine.children).forEach((seg) => {
       const task = started.find((t) => t.id === seg.dataset.id);
       if (!task) return;
-      seg.dataset.color = String(colorById.get(task.id) ?? index);
+      seg.dataset.color = String(colorById.get(task.id));
       const up = timerModeOf(task) === "up";
       seg.classList.toggle("up", up);
       if (!up) {
@@ -527,7 +441,6 @@
         const p = Math.min(1, Math.max(0, Number(task.spent_sec || 0) / est));
         seg.style.setProperty("--p", String(p));
       }
-      seg.classList.toggle("current", task.id === currentId);
       seg.dataset.state = task.running ? "running" : "paused";
     });
   }
@@ -539,23 +452,32 @@
   }
 
   async function saveNow() {
-    if (!invoke || saving) return;
+    if (!invoke) return;
+    saveQueued = true;
+    if (saving) return;
     saving = true;
     try {
-      const snapshot = serialize();
-      await invoke("save_plan", { plan });
-      lastSnapshot = snapshot;
+      while (saveQueued) {
+        saveQueued = false;
+        const snapshot = serialize();
+        await invoke("save_plan", { plan: JSON.parse(snapshot) });
+        lastSnapshot = snapshot;
+      }
     } catch (err) {
       console.warn("[workbar] save failed", err);
     } finally {
       saving = false;
+      if (externalQueued) {
+        externalQueued = false;
+        externalChange();
+      }
     }
   }
 
   function maybeSave(force) {
     sinceSave += 1;
-    const runningTask = (plan.tasks || []).find((t) => t.running && !t.done);
-    if (force || (runningTask && sinceSave >= 12)) {
+    const hasRunningTasks = (plan.tasks || []).some((t) => t.running && !t.done);
+    if (force || (hasRunningTasks && sinceSave >= 12)) {
       sinceSave = 0;
       saveNow();
     }
@@ -564,52 +486,41 @@
   // ---------------------------------------------------------------- actions
 
   function toggleTaskPause(id) {
+    settleTimers();
     const view = computeView();
-    if (!view.task || view.state === "empty" || view.state === "complete") return;
+    if (view.state === "empty" || view.state === "complete") return;
     const task = (plan.tasks || []).find((t) => t.id === id);
     if (!task || task.done) return;
-    const isCurrent = view.task.id === id;
-    if (task.running) {
-      task.running = false;
-      if (isCurrent) paused.add(task.id);
-    } else {
-      task.running = true;
-      if (isCurrent) {
-        paused.delete(task.id);
-        plan.current_id = task.id;
-      }
-    }
+    task.running = !task.running;
+    task.paused = !task.running;
+    carryByTask.delete(task.id);
     render(computeView());
     saveNow();
   }
 
   function completeTask(id) {
-    if (busy) return;
-    const view = computeView();
+    settleTimers();
     const task = (plan.tasks || []).find((t) => t.id === id);
     if (!task || task.done) return;
-    const isCurrent = !!view.task && view.task.id === id;
-    busy = true;
-    const finish = () => {
-      task.done = true;
-      task.running = false;
-      paused.delete(task.id);
-      if (plan.current_id === task.id) plan.current_id = null;
-      el.bar.classList.remove("flash", "leaving");
-      busy = false;
-      render(computeView());
-      saveNow();
-    };
-    if (isCurrent) {
-      el.bar.classList.add("flash", "leaving");
-      burst();
-      setTimeout(finish, 250);
-    } else {
-      finish();
-    }
+    const refs = unitNodes.find((node) => node.taskId === id);
+    if (refs) burst(refs.done);
+    task.done = true;
+    task.running = false;
+    task.paused = false;
+    carryByTask.delete(task.id);
+    render(computeView());
+    saveNow();
   }
 
-  function burst() {
+  function burst(button) {
+    const buttonRect = button.getBoundingClientRect();
+    const barRect = el.bar.getBoundingClientRect();
+    const origin = document.createElement("div");
+    origin.className = "burst";
+    origin.setAttribute("aria-hidden", "true");
+    origin.style.left = `${buttonRect.left + buttonRect.width / 2 - barRect.left}px`;
+    origin.style.top = `${buttonRect.top + buttonRect.height / 2 - barRect.top}px`;
+    el.bar.append(origin);
     const count = 9;
     for (let i = 0; i < count; i += 1) {
       const particle = document.createElement("i");
@@ -618,9 +529,9 @@
       particle.style.setProperty("--dx", `${Math.cos(angle) * distance}px`);
       particle.style.setProperty("--dy", `${Math.sin(angle) * distance}px`);
       particle.style.animationDelay = `${Math.random() * 60}ms`;
-      el.burst.append(particle);
-      setTimeout(() => particle.remove(), 900);
+      origin.append(particle);
     }
+    setTimeout(() => origin.remove(), 1000);
   }
 
   // Trace timestamps go to trace.log via Rust; Date.now() in the message keeps
@@ -660,7 +571,6 @@
     return {
       date: typeof next.date === "string" ? next.date : "",
       intro: next.intro || undefined,
-      current_id: next.current_id || null,
       tasks: Array.isArray(next.tasks)
         ? next.tasks.map((task) => ({
             id: String(task.id || ""),
@@ -670,7 +580,8 @@
             est_min: Math.max(0, Math.floor(Number(task.est_min) || 0)),
             timer: task.timer === "up" ? "up" : task.timer === "down" ? "down" : undefined,
             spent_sec: Math.max(0, Math.floor(Number(task.spent_sec) || 0)),
-            running: !!task.running,
+            running: !!task.running && !task.done,
+            paused: !!task.paused && !task.running && !task.done,
             done: !!task.done,
             source: task.source || undefined,
             note: task.note || undefined,
@@ -709,22 +620,31 @@
 
   async function externalChange() {
     if (!invoke) return;
+    if (saving) {
+      externalQueued = true;
+      return;
+    }
     let fresh;
     try {
       fresh = normalizePlan(await invoke("get_plan"));
     } catch {
       return;
     }
+    if (saving) {
+      externalQueued = true;
+      return;
+    }
     const freshSnapshot = JSON.stringify(fresh);
     if (freshSnapshot === lastSnapshot) return;
 
-    // Keep the local timer alive when only the structure changed elsewhere.
+    settleTimers();
+    // Keep elapsed time while respecting each task's externally supplied state.
     const localById = new Map((plan.tasks || []).map((t) => [t.id, t]));
     for (const task of fresh.tasks) {
       const local = localById.get(task.id);
       if (!local) continue;
       task.spent_sec = Math.max(task.spent_sec, local.spent_sec);
-      if (local.running && !task.done) task.running = true;
+      if (local.running !== task.running || task.done) carryByTask.delete(task.id);
     }
     plan = fresh;
     rollPlanDate();
@@ -738,7 +658,6 @@
     return {
       date: todayString(),
       intro: "demo",
-      current_id: null,
       tasks: [
         { id: "t1", title: "写周报", start: "09:30", end: "10:00", est_min: 30, spent_sec: 0 },
         { id: "t2", title: "修登录 bug", start: "10:00", end: "11:00", est_min: 60, spent_sec: 0 },
@@ -749,30 +668,35 @@
 
   // ------------------------------------------------------------------- tick
 
+  function settleTimers() {
+    const nowMs = Date.now();
+    const delta = Math.max(0, (nowMs - lastTickAt) / 1000);
+    lastTickAt = nowMs;
+
+    const running = (plan.tasks || []).filter((t) => !t.done && t.running);
+    let changed = false;
+    for (const task of running) {
+      const carry = (carryByTask.get(task.id) || 0) + delta;
+      const whole = Math.floor(carry);
+      carryByTask.set(task.id, carry - whole);
+      if (whole > 0) {
+        task.spent_sec = Math.floor(Number(task.spent_sec || 0)) + whole;
+        changed = true;
+      }
+    }
+    // Forget carries of tasks that stopped running.
+    for (const id of Array.from(carryByTask.keys())) {
+      if (!running.some((task) => task.id === id)) carryByTask.delete(id);
+    }
+    return changed;
+  }
+
   function tick() {
     try {
       // running across midnight must not leave the plan stale for a day
       rollPlanDate();
-      const nowMs = Date.now();
-      const delta = Math.max(0, (nowMs - lastTickAt) / 1000);
-      lastTickAt = nowMs;
-
+      const changed = settleTimers();
       const view = computeView();
-      const running = (plan.tasks || []).filter((t) => !t.done && t.running);
-      let changed = false;
-      for (const task of running) {
-        const carry = (carryByTask.get(task.id) || 0) + delta;
-        const whole = Math.floor(carry);
-        carryByTask.set(task.id, carry - whole);
-        if (whole > 0) {
-          task.spent_sec = Math.floor(Number(task.spent_sec || 0)) + whole;
-          changed = true;
-        }
-      }
-      // forget carries of tasks that stopped running
-      for (const id of Array.from(carryByTask.keys())) {
-        if (!running.some((task) => task.id === id)) carryByTask.delete(id);
-      }
       if (changed) maybeSave(false);
       render(view, false);
     } catch (err) {

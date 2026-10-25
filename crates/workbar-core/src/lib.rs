@@ -19,6 +19,10 @@ use std::time::{Duration, SystemTime};
 pub const APP_DIR: &str = "Workbar";
 pub const DEFAULT_EST_MIN: u32 = 25;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// How a task's timer behaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -58,6 +62,10 @@ pub struct Task {
     pub spent_sec: u64,
     #[serde(default)]
     pub running: bool,
+    /// Explicitly paused, including a pause before the first elapsed second.
+    /// Prevents the schedule from restarting this task after a reload.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub paused: bool,
     #[serde(default)]
     pub done: bool,
     /// Who created the task (e.g. the AI client name) for work sessions made
@@ -89,6 +97,7 @@ impl Default for Task {
             timer: None,
             spent_sec: 0,
             running: false,
+            paused: false,
             done: false,
             source: None,
             note: None,
@@ -105,7 +114,8 @@ pub struct Plan {
     /// One line that says what today is really about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intro: Option<String>,
-    /// Task the bar is currently showing.
+    /// Legacy client metadata, retained only to read and round-trip old plans.
+    /// Task state and rendering no longer depend on this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_id: Option<String>,
     #[serde(default)]
@@ -158,46 +168,6 @@ pub fn today_weekday() -> String {
     use chrono::Datelike;
     const NAMES: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
     NAMES[chrono::Local::now().weekday().num_days_from_monday() as usize].to_string()
-}
-
-/// The task the bar is currently showing: explicit selection first, then the
-/// task whose time window contains `now`, then the next upcoming one.
-pub fn current_task(plan: &Plan, now_minutes: u32) -> Option<&Task> {
-    if let Some(id) = plan.current_id.as_deref() {
-        if let Some(task) = plan.tasks.iter().find(|task| task.id == id && !task.done) {
-            return Some(task);
-        }
-    }
-    if let Some(task) = plan.tasks.iter().find(|task| {
-        if task.done {
-            return false;
-        }
-        match (
-            task.start.as_deref().and_then(parse_hhmm),
-            task.end.as_deref().and_then(parse_hhmm),
-        ) {
-            (Some(start), Some(end)) => now_minutes >= start && now_minutes < end,
-            _ => false,
-        }
-    }) {
-        return Some(task);
-    }
-    if let Some(task) = plan
-        .tasks
-        .iter()
-        .filter(|task| !task.done)
-        .filter(|task| {
-            task.start
-                .as_deref()
-                .and_then(parse_hhmm)
-                .map(|start| start > now_minutes)
-                .unwrap_or(false)
-        })
-        .min_by_key(|task| task.start.as_deref().and_then(parse_hhmm).unwrap_or(u32::MAX))
-    {
-        return Some(task);
-    }
-    plan.tasks.iter().find(|task| !task.done)
 }
 
 /// Parse `HH:mm` (or `H:mm`) into minutes since midnight.
@@ -257,6 +227,12 @@ pub fn normalize_task(task: &mut Task) -> Result<(), String> {
     }
     if task.id.trim().is_empty() {
         task.id = new_id();
+    }
+    if task.done {
+        task.running = false;
+        task.paused = false;
+    } else if task.running {
+        task.paused = false;
     }
     if let Some(source) = &task.source {
         let trimmed = source.trim().to_string();
@@ -406,8 +382,6 @@ pub fn summarize(plan: &Plan) -> String {
     for task in &plan.tasks {
         let mark = if task.done {
             "x"
-        } else if plan.current_id.as_deref() == Some(task.id.as_str()) {
-            ">"
         } else {
             " "
         };
@@ -428,8 +402,17 @@ pub fn summarize(plan: &Plan) -> String {
             format!(" est:{}m", task.est_min)
         };
         let ai = if task.source.is_some() { " (AI)" } else { "" };
+        let state = if task.done {
+            ""
+        } else if task.running {
+            " running"
+        } else if task.paused || task.spent_sec > 0 {
+            " paused"
+        } else {
+            ""
+        };
         out.push_str(&format!(
-            "- [{mark}] {id}  {title}{window}{target}{spent}{ai}\n",
+            "- [{mark}] {id}  {title}{window}{target}{spent}{state}{ai}\n",
             id = task.id,
             title = task.title
         ));
@@ -440,22 +423,79 @@ pub fn summarize(plan: &Plan) -> String {
     out
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paused_state_is_backward_compatible_and_survives_round_trip() {
+        let mut task: Task = serde_json::from_value(serde_json::json!({ "title": "task" })).unwrap();
+        assert!(!task.paused);
+        assert!(serde_json::to_value(&task).unwrap().get("paused").is_none());
+        task.paused = true;
+        let restored: Task = serde_json::from_value(serde_json::to_value(&task).unwrap()).unwrap();
+        assert!(restored.paused);
+        assert_eq!(restored.spent_sec, 0);
+    }
+
+    #[test]
+    fn running_and_completed_tasks_clear_only_their_own_pause() {
+        let mut running = Task { title: "running".into(), running: true, paused: true, ..Task::default() };
+        normalize_task(&mut running).unwrap();
+        assert!(running.running);
+        assert!(!running.paused);
+        let mut done = Task { title: "done".into(), running: true, paused: true, done: true, ..Task::default() };
+        normalize_task(&mut done).unwrap();
+        assert!(!done.running);
+        assert!(!done.paused);
+        let mut paused = Task { title: "paused".into(), paused: true, ..Task::default() };
+        normalize_task(&mut paused).unwrap();
+        assert!(paused.paused);
+        assert!(!paused.running);
+    }
+
+    #[test]
+    fn legacy_current_id_does_not_mark_or_start_a_task() {
+        let plan = Plan {
+            current_id: Some("b".into()),
+            tasks: vec![
+                Task { id: "a".into(), title: "a".into(), ..Task::default() },
+                Task { id: "b".into(), title: "b".into(), ..Task::default() },
+            ],
+            ..Plan::default()
+        };
+        let summary = summarize(&plan);
+        assert!(!summary.contains("[>]"));
+        assert!(summary.contains("- [ ] a"));
+        assert!(summary.contains("- [ ] b"));
+        assert!(plan.tasks.iter().all(|task| !task.running));
+    }
+
+    #[test]
+    fn session_hint_does_not_pick_one_task_by_position() {
+        let plan = Plan {
+            tasks: vec![
+                Task { id: "a".into(), title: "a".into(), source: Some("one".into()), ..Task::default() },
+                Task { id: "b".into(), title: "b".into(), source: Some("two".into()), ..Task::default() },
+            ],
+            ..Plan::default()
+        };
+        let result = tool_result_text(&plan, "test");
+        assert!(result.contains("2 independent AI work sessions open"));
+        assert!(result.contains("with the intended task's id"));
+    }
+}
+
 /// Summary tailored for a tool result: headline + human summary + raw JSON.
 pub fn tool_result_text(plan: &Plan, message: &str) -> String {
     // Footer reminder: models read tool results, so this is the most reliable
     // place to repeat the work-session convention (clients may ignore
     // `instructions`, but every client passes tool results back to the model).
-    let hint = match plan
-        .tasks
-        .iter()
-        .rev()
-        .find(|task| task.source.is_some() && !task.done)
-    {
-        Some(task) => format!(
-            "AI work session running: \"{}\" (id {}). Call workbar_finish_work when the job is done.",
-            task.title, task.id
-        ),
-        None => "Work session convention: before doing any job for the user, call workbar_start_work with a 3-8 character title; when the job is done, call workbar_finish_work.".to_string(),
+    let open_sessions = plan.tasks.iter().filter(|task| task.source.is_some() && !task.done).count();
+    let hint = if open_sessions > 0 {
+        format!("{open_sessions} independent AI work sessions open. Call workbar_finish_work with the intended task's id when that job is done; other tasks keep their states.")
+    } else {
+        "Work session convention: before doing any job for the user, call workbar_start_work with a 3-8 character title; when the job is done, call workbar_finish_work with that task's id.".to_string()
     };
     format!(
         "{message}\n\n{}\n\n{hint}\n```json\n{}\n```",
