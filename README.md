@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" width="92" alt="Workbar icon" />
+  <img src="build/app-icon.png" width="92" alt="Workbar 紫蓝青渐变三环图标" />
 </p>
 
 <h1 align="center">Workbar</h1>
