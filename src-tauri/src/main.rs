@@ -611,11 +611,17 @@ fn main() {
         })
         .on_window_event(|window, event| {
             shortcut_settings::window_event(window, event);
+            if let WindowEvent::Destroyed = event {
+                trace(&format!("window destroyed label={}", window.label()));
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
+                trace(&format!("close requested label={}", window.label()));
                 api.prevent_close();
                 let _ = window.hide();
             }
         })
         .run(tauri::generate_context!())
+        .inspect_err(|error| log_boot(&format!("event loop exited with error: {error}")))
+        .inspect(|_| log_boot("event loop exited cleanly"))
         .expect("error while running Workbar");
 }
