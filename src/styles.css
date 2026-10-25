@@ -395,12 +395,13 @@ body {
 }
 
 .pulse {
+  --pulse-rgb: 110, 231, 183;
   flex: 0 0 auto;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--ok);
-  box-shadow: 0 0 0 0 rgba(110, 231, 183, 0.5);
+  box-shadow: 0 0 0 0 rgba(var(--pulse-rgb), 0.5);
   opacity: 0;
   transition: opacity 0.3s ease;
 }
@@ -412,13 +413,13 @@ body {
 
 @keyframes pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(110, 231, 183, 0.45);
+    box-shadow: 0 0 0 0 rgba(var(--pulse-rgb), 0.45);
   }
   60% {
-    box-shadow: 0 0 0 7px rgba(110, 231, 183, 0);
+    box-shadow: 0 0 0 7px rgba(var(--pulse-rgb), 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(110, 231, 183, 0);
+    box-shadow: 0 0 0 0 rgba(var(--pulse-rgb), 0);
   }
 }
 
@@ -457,10 +458,6 @@ body {
 
 .status.strong {
   color: var(--accent);
-}
-
-.status.warn {
-  color: var(--warn);
 }
 
 /* --------------------------------------------------------------- done ✓ */
@@ -815,6 +812,11 @@ body {
 
 .unit.overdue .elapsed {
   color: var(--warn);
+}
+
+.unit.overdue .pulse {
+  --pulse-rgb: 255, 196, 107;
+  background: var(--warn);
 }
 
 .unit.overdue .ring-fill {

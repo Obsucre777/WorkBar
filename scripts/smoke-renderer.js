@@ -42,6 +42,12 @@ function bootstrap() {
   if (scene === 'third') plan.tasks = [countdown('a'), countdown('b'), countdown('c', 409)];
   if (scene === 'single') plan.tasks = [countdown('a', 409)];
   if (scene === 'reuse') plan.tasks[2] = countdown('c');
+  if (scene === 'compact') plan.tasks = [
+    { ...countdown('a', 951), est_min: 10 },
+    { ...countdown('b'), est_min: 90 },
+    { ...countdown('c'), est_min: 60 },
+  ];
+  if (scene === 'boundary') plan.tasks = [countdown('a', 300), countdown('b', 359), countdown('c', 360)];
   const clone = (value) => JSON.parse(JSON.stringify(value));
   async function emit(name, payload) {
     for (const handler of listeners.get(name) || []) await handler({ payload });
@@ -106,23 +112,33 @@ async function runInBrowser() {
     };
   }
   const warn = 'rgb(255, 196, 107)';
+  const running = 'rgb(110, 231, 183)';
   const normalTime = 'rgb(200, 203, 230)';
   const identity = { a: 'rgb(143, 162, 255)', b: 'rgb(34, 211, 238)', c: 'rgb(251, 113, 133)' };
   function normal(view, id) {
     assert(`${id}: identity ring colour`, view.color(id, '.ring-fill', 'stroke') === identity[id]);
     assert(`${id}: normal elapsed colour`, view.color(id, '.elapsed', 'color') === normalTime);
+    assert(`${id}: normal status dot stays green`, view.color(id, '.pulse', 'backgroundColor') === running);
+    const isRunning = view.unit(id).querySelector('.ring').dataset.mode === 'running';
+    assert(`${id}: status dot follows running state`, view.color(id, '.pulse', 'opacity') === (isRunning ? '1' : '0'));
   }
   function overdue(view, id) {
     assert(`${id}: overdue ring colour`, view.color(id, '.ring-fill', 'stroke') === warn);
     assert(`${id}: overdue elapsed colour`, view.color(id, '.elapsed', 'color') === warn);
-    assert(`${id}: overdue text`, view.unit(id).querySelector('.status').textContent === '超时 1 分钟');
+    assert(`${id}: overdue status dot matches ring`, view.color(id, '.pulse', 'backgroundColor') === warn);
+    assert(`${id}: overdue status dot stays visible`, view.color(id, '.pulse', 'opacity') === '1');
+    const status = view.unit(id).querySelector('.status');
+    assert(`${id}: no extra overdue wording`, status.textContent === '' && status.hidden);
   }
   try {
     let view = await fixture('base');
     overdue(view, 'a');
     normal(view, 'b');
+    assert('countdown estimate drops the prefix and spaces', view.unit('a').querySelector('.estimate').textContent === '5分钟');
+    assert('stopwatch has no estimate or divider', view.unit('b').querySelector('.estimate').hidden && view.unit('b').querySelector('.slash').hidden);
     assert('unstarted task remains idle', view.unit('c').querySelector('.ring').dataset.mode === 'idle');
     assert('unstarted ring stays hidden', view.win.getComputedStyle(view.unit('c').querySelector('.ring-fill')).opacity === '0');
+    assert('unstarted task has no status dot', view.color('c', '.pulse', 'opacity') === '0');
     const gradients = () => [...view.doc.querySelectorAll('.slim-seg')].map((node) => view.win.getComputedStyle(node).backgroundImage);
     const before = gradients();
     assert('collapsed segments retain distinct identity gradients', before.length === 2 && before[0].includes('rgb(110, 123, 255)') && before[1].includes('rgb(34, 211, 238)'));
@@ -161,7 +177,19 @@ async function runInBrowser() {
     await view.win.__smoke.setPlan(next);
     assert('renderer reuses task nodes', view.unit('b') === reused);
     assert('reused node clears obsolete overdue style', view.color('b', '.ring-fill', 'stroke') === identity.a && view.color('b', '.elapsed', 'color') === normalTime);
-    assert('reused node clears obsolete overdue text', view.unit('b').querySelector('.status').textContent === '');
+    assert('reused node clears obsolete warning dot', view.color('b', '.pulse', 'backgroundColor') === running && view.color('b', '.pulse', 'opacity') === '1');
+    assert('reused node has no extra status wording', view.unit('b').querySelector('.status').textContent === '' && view.unit('b').querySelector('.status').hidden);
+
+    view = await fixture('compact');
+    overdue(view, 'a');
+    assert('10-minute estimate stays compact', view.unit('a').querySelector('.estimate').textContent === '10分钟');
+    assert('mixed-hour estimate stays compact', view.unit('b').querySelector('.estimate').textContent === '1小时30分');
+    assert('whole-hour estimate stays compact', view.unit('c').querySelector('.estimate').textContent === '1小时');
+
+    view = await fixture('boundary');
+    normal(view, 'a');
+    normal(view, 'b');
+    overdue(view, 'c');
 
     view = await fixture('single');
     overdue(view, 'a');

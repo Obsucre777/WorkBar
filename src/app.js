@@ -76,9 +76,9 @@
     if (m >= 60) {
       const h = Math.floor(m / 60);
       const rest = m % 60;
-      return rest ? `预计 ${h} 小时 ${rest} 分` : `预计 ${h} 小时`;
+      return rest ? `${h}小时${rest}分` : `${h}小时`;
     }
-    return `预计 ${m} 分钟`;
+    return `${m}分钟`;
   }
 
   function taskWindowLabel(task) {
@@ -346,18 +346,12 @@
     const mode = task.running ? "running" : "paused";
     const isOverdue = !up && mode === "running" && overdue > 0;
     // already timed (running or paused): elapsed / estimate, nothing else
-    let status = "";
-    let statusClass = "";
-    if (isOverdue) {
-      status = `超时 ${overdue} 分钟`;
-      statusClass = "warn";
-    }
     return {
       title: task.title || "未命名任务",
       elapsed: formatClock(spent),
       estimate: up ? "" : formatEstimate(task.est_min),
-      status,
-      statusClass,
+      status: "",
+      statusClass: "",
       overdue: isOverdue,
       progress,
       mode,
@@ -394,6 +388,7 @@
         refs.estimate.hidden = !target.estimate;
         refs.slash.hidden = !target.elapsed || !target.estimate;
         refs.status.textContent = target.status;
+        refs.status.hidden = !target.status;
         refs.status.className = `status ${target.statusClass}`.trim();
         refs.fill.style.strokeDashoffset = String(RING_LEN * (1 - target.progress));
         refs.fill.style.opacity = target.showProgress ? "" : "0";
