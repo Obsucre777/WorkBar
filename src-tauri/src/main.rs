@@ -216,6 +216,34 @@ fn bar_geometry(
     Some((PhysicalSize::new(width, height), PhysicalPosition::new(x, origin.y)))
 }
 
+/// A parking spot fully outside every connected monitor. Deliberately NOT
+/// (-32000, -32000): that is where Windows parks *minimized* windows, and
+/// WebView2 treats a window resting there like a minimized one — delivery
+/// into the webview then stalled for seconds after the resize (traced).
+fn offscreen_park(window: &WebviewWindow) -> PhysicalPosition<i32> {
+    let mut right: i32 = i32::MIN;
+    let mut top: i32 = 0;
+    let mut have = false;
+    if let Ok(monitors) = window.available_monitors() {
+        for monitor in monitors {
+            let p = monitor.position();
+            let s = monitor.size();
+            right = right.max(p.x + s.width as i32);
+            if have {
+                top = top.min(p.y);
+            } else {
+                top = p.y;
+                have = true;
+            }
+        }
+    }
+    if have {
+        PhysicalPosition::new(right + 100, top)
+    } else {
+        PhysicalPosition::new(-32000, -32000)
+    }
+}
+
 /// Horizontal pill centered at the top of the primary monitor.
 fn place(window: &WebviewWindow, collapsed: bool) {
     if let Some((size, position)) = bar_geometry(window, collapsed) {
@@ -275,7 +303,7 @@ fn apply_bar_state_later(app: AppHandle, requested: bool) {
             // trace.log). Off-screen the window stays "visible" to WebView2,
             // so neither happens: the band renders outside the monitor and
             // the renderer never suspends.
-            let _ = window.set_position(PhysicalPosition::new(-32000, -32000));
+            let _ = window.set_position(offscreen_park(&window));
             let _ = window.set_size(size);
             // Re-assert a fully transparent backdrop after the resize,
             // otherwise some WebView2 versions keep the opaque band.
