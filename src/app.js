@@ -137,15 +137,19 @@
     }
 
     let current = null;
+    let fromCurrentId = false;
     if (plan.current_id) {
       current = pending.find((t) => t.id === plan.current_id) || null;
+      fromCurrentId = !!current;
     }
+    let reachedByClock = false;
     if (!current) {
       current = pending.find((t) => {
         const start = hhmmToMin(t.start);
         const end = hhmmToMin(t.end);
         return start !== null && end !== null && now >= start && now < end;
       });
+      reachedByClock = !!current;
     }
     if (!current) {
       const upcoming = pending
@@ -168,8 +172,16 @@
       return view;
     }
 
-    // Auto-start when the clock reaches a task, unless the user paused it.
-    if (view.state === "active" && !current.running && !paused.has(current.id)) {
+    // Auto-start only when the clock reached the task's window or something
+    // explicitly pointed the bar at it. The old blanket rule also started the
+    // "first pending task" fallback pick, which surprise-started a task the
+    // moment it was added while the previous current task had just finished.
+    if (
+      (fromCurrentId || reachedByClock) &&
+      view.state === "active" &&
+      !current.running &&
+      !paused.has(current.id)
+    ) {
       current.running = true;
     }
     if (current.running && view.state === "upcoming") {
