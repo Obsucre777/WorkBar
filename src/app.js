@@ -14,7 +14,6 @@
     bar: $("bar"),
     units: $("units"),
     more: $("more"),
-    progress: $("progress"),
     collapse: $("collapse"),
     slim: $("slim"),
     slimBar: $("slimBar"),
@@ -351,9 +350,6 @@
     bar.classList.toggle("complete", view.state === "complete");
 
     const shownUnits = renderUnits(view, immediate);
-
-    // progress counter
-    el.progress.textContent = `${view.doneCount} / ${view.total}`;
 
     // more pending tasks than fit on the bar: show "+N" (hover lists them)
     const shownIds = new Set(shownUnits.map((task) => task.id));
