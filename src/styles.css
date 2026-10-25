@@ -623,8 +623,9 @@ body {
   display: none;
 }
 
-/* stopwatch (timer = up): fixed-width dash, breathing while running */
+/* stopwatch (timer = up): full-width line, breathing while running */
 .slim-bar.up {
+  transform: none;
   animation: slim-breathe 2.4s ease-in-out infinite;
 }
 
@@ -670,9 +671,10 @@ body {
   opacity: 0.55;
 }
 
-/* stopwatch (timer = up): fixed width + breathing; paused stays static and dim */
+/* every started task gets an equal share of the line regardless of timer
+   kind (1 -> full width, 2 -> halves, 3 -> thirds); a stopwatch fills its
+   whole share and breathes, a countdown retracts within its share */
 .slim-seg.up {
-  flex: 0 0 12%;
   transform: none;
   animation: slim-breathe 2.4s ease-in-out infinite;
 }

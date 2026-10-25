@@ -481,10 +481,9 @@
       const task = started[0];
       const up = timerModeOf(task) === "up";
       el.slimBar.classList.toggle("up", up);
-      if (up) {
-        // stopwatch: fixed-width dash whose brightness breathes while running
-        el.slimBar.style.setProperty("--p", "0.88");
-      } else {
+      // a stopwatch fills the whole line (CSS drops the retraction transform);
+      // only a countdown tracks progress
+      if (!up) {
         const p = Math.min(
           1,
           Math.max(0, Number(task.spent_sec || 0) / Math.max(1, Number(task.est_min || 25) * 60))
