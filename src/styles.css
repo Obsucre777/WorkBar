@@ -118,6 +118,7 @@ body {
 /* ------------------------------------------------------- task units */
 
 .task-viewport {
+  position: relative;
   flex: 0 1 auto;
   min-width: 0;
   width: var(--card-width);
@@ -138,6 +139,7 @@ body {
   flex: 0 0 var(--card-width);
   width: var(--card-width);
   min-width: 0;
+  height: 44px;
   padding: 0 6px;
   border-left: 1px solid transparent;
 }
@@ -145,6 +147,12 @@ body {
 /* parallel timers: identical task controls, divided by a separator */
 .unit + .unit {
   border-left-color: rgba(255, 255, 255, 0.08);
+}
+
+.unit-exit {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
 }
 
 .unit .now {

@@ -43,6 +43,8 @@
   let windowAnchor = null;
   let visibleIds = [];
   let windowCapacity = MAX_VISIBLE_TASKS;
+  let viewportMotion = null;
+  const leavingUnits = new Map();
 
   // ------------------------------------------------------------------ time
 
@@ -175,8 +177,12 @@
 
   // ----------------------------------------------------------------- render
 
+  function reducedMotion() {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
   function animateUnitTitle(node, text, immediate) {
-    if (immediate || !node.animate) {
+    if (immediate || reducedMotion() || !node.animate) {
       node.textContent = text;
       return;
     }
@@ -190,59 +196,182 @@
     node.textContent = text;
   }
 
-  /** Build (or reuse) the same controls for every displayed task. */
-  function ensureUnits(count) {
-    if (unitNodes.length === count) return unitNodes;
-    el.units.replaceChildren();
-    unitNodes = [];
-    for (let index = 0; index < count; index += 1) {
-      const root = document.createElement("div");
-      root.className = "unit";
-      root.innerHTML = [
-        '<button class="ring" type="button" title="暂停 / 继续计时" aria-label="暂停或继续计时">',
-        '  <svg class="ring-svg" viewBox="0 0 44 44" aria-hidden="true">',
-        '    <circle class="ring-track" cx="22" cy="22" r="18"></circle>',
-        '    <circle class="ring-fill" cx="22" cy="22" r="18"></circle>',
-        "  </svg>",
-        '  <span class="ring-glyph" aria-hidden="true">',
-        '    <svg viewBox="0 0 12 14" class="glyph-play"><path d="M1.6 1.2 10.4 7 1.6 12.8Z"></path></svg>',
-        '    <svg viewBox="0 0 12 14" class="glyph-pause"><path d="M2 1.5h2.6v11H2zM7.4 1.5H10v11H7.4z"></path></svg>',
-        "  </span>",
-        "</button>",
-        '<div class="now">',
-        '  <div class="now-head"><h1 class="title"></h1><span class="pulse" aria-hidden="true"></span></div>',
-        '  <div class="now-sub"><span class="elapsed">--:--</span><span class="slash">/</span><span class="estimate">--</span><span class="status"></span></div>',
-        "</div>",
-        '<button class="done" type="button" title="完成这一项" aria-label="完成">',
-        '  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.8 12.6 9.6 17.4 19.2 6.9"></path></svg>',
-        "</button>",
-      ].join("");
-      const refs = {
-        root,
-        ring: root.querySelector(".ring"),
-        fill: root.querySelector(".ring-fill"),
-        pulse: root.querySelector(".pulse"),
-        title: root.querySelector(".title"),
-        elapsed: root.querySelector(".elapsed"),
-        slash: root.querySelector(".slash"),
-        estimate: root.querySelector(".estimate"),
-        status: root.querySelector(".status"),
-        done: root.querySelector(".done"),
-        taskId: null,
-        titleText: "",
-        key: "",
-      };
-      // only the ring starts / pauses the timer
-      refs.ring.addEventListener("click", () => {
-        if (refs.taskId) toggleTaskPause(refs.taskId);
-      });
-      refs.done.addEventListener("click", () => {
-        if (refs.taskId) completeTask(refs.taskId);
-      });
-      el.units.append(root);
-      unitNodes.push(refs);
+  /** Each task keeps its own controls when it changes position. */
+  function createUnit() {
+    const root = document.createElement("div");
+    root.className = "unit";
+    root.innerHTML = [
+      '<button class="ring" type="button" title="暂停 / 继续计时" aria-label="暂停或继续计时">',
+      '  <svg class="ring-svg" viewBox="0 0 44 44" aria-hidden="true">',
+      '    <circle class="ring-track" cx="22" cy="22" r="18"></circle>',
+      '    <circle class="ring-fill" cx="22" cy="22" r="18"></circle>',
+      "  </svg>",
+      '  <span class="ring-glyph" aria-hidden="true">',
+      '    <svg viewBox="0 0 12 14" class="glyph-play"><path d="M1.6 1.2 10.4 7 1.6 12.8Z"></path></svg>',
+      '    <svg viewBox="0 0 12 14" class="glyph-pause"><path d="M2 1.5h2.6v11H2zM7.4 1.5H10v11H7.4z"></path></svg>',
+      "  </span>",
+      "</button>",
+      '<div class="now">',
+      '  <div class="now-head"><h1 class="title"></h1><span class="pulse" aria-hidden="true"></span></div>',
+      '  <div class="now-sub"><span class="elapsed">--:--</span><span class="slash">/</span><span class="estimate">--</span><span class="status"></span></div>',
+      "</div>",
+      '<button class="done" type="button" title="完成这一项" aria-label="完成">',
+      '  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.8 12.6 9.6 17.4 19.2 6.9"></path></svg>',
+      "</button>",
+    ].join("");
+    const refs = {
+      root,
+      ring: root.querySelector(".ring"),
+      fill: root.querySelector(".ring-fill"),
+      pulse: root.querySelector(".pulse"),
+      title: root.querySelector(".title"),
+      elapsed: root.querySelector(".elapsed"),
+      slash: root.querySelector(".slash"),
+      estimate: root.querySelector(".estimate"),
+      status: root.querySelector(".status"),
+      done: root.querySelector(".done"),
+      taskId: null,
+      titleText: "",
+      key: "",
+      motion: null,
+    };
+    // only the ring starts / pauses the timer
+    refs.ring.addEventListener("click", () => {
+      if (refs.taskId) toggleTaskPause(refs.taskId);
+    });
+    refs.done.addEventListener("click", () => {
+      if (refs.taskId) completeTask(refs.taskId);
+    });
+    return refs;
+  }
+
+  function stopCardMotion() {
+    for (const refs of unitNodes) {
+      refs.motion?.cancel();
+      refs.motion = null;
     }
-    return unitNodes;
+    viewportMotion?.cancel();
+    viewportMotion = null;
+    for (const [node, animation] of leavingUnits) {
+      animation.cancel();
+      node.remove();
+    }
+    leavingUnits.clear();
+  }
+
+  function animateCard(refs, frames) {
+    const animation = refs.root.animate(frames, {
+      duration: 320,
+      delay: 35,
+      easing: "cubic-bezier(.16,1,.3,1)",
+      fill: "backwards",
+    });
+    refs.motion = animation;
+    const release = () => {
+      if (refs.motion === animation) refs.motion = null;
+    };
+    animation.finished.then(release, release);
+  }
+
+  function exitUnit(refs, rect, origin, opacity) {
+    const node = refs.root;
+    delete node.dataset.id;
+    node.classList.add("unit-exit");
+    node.inert = true;
+    node.setAttribute("aria-hidden", "true");
+    node.style.left = `${rect.left - origin.left}px`;
+    node.style.top = `${rect.top - origin.top}px`;
+    el.viewport.append(node);
+    const animation = node.animate([
+      { opacity, transform: "translateX(0) scale(1)" },
+      { opacity: 0, transform: "translateX(-12px) scale(.96)" },
+    ], { duration: 150, easing: "ease-out" });
+    leavingUnits.set(node, animation);
+    const release = () => {
+      node.remove();
+      leavingUnits.delete(node);
+    };
+    animation.finished.then(release, release);
+  }
+
+  function ensureUnits(tasks, immediate, previousWidth) {
+    const ids = tasks.length ? tasks.map((task) => task.id) : [null];
+    const animate = !immediate && !collapsed && !reducedMotion()
+      && typeof el.units.animate === "function" && unitNodes.length > 0;
+    if (ids.length === unitNodes.length && ids.every((id, index) => unitNodes[index].taskId === id)) {
+      if (!animate) stopCardMotion();
+      return unitNodes;
+    }
+
+    // Read the currently painted positions before cancelling an earlier move,
+    // so a second completion can continue smoothly from the middle of it.
+    const before = new Map(unitNodes.map((refs) => [refs.taskId, refs.root.getBoundingClientRect()]));
+    const opacity = new Map(unitNodes.map((refs) => [refs.taskId, Number(getComputedStyle(refs.root).opacity)]));
+    const previous = new Map(unitNodes.map((refs) => [refs.taskId, refs]));
+    if (!animate) stopCardMotion();
+    else {
+      for (const refs of unitNodes) {
+        refs.motion?.cancel();
+        refs.motion = null;
+      }
+      viewportMotion?.cancel();
+      viewportMotion = null;
+    }
+    const next = ids.map((id) => {
+      const refs = previous.get(id) || createUnit();
+      refs.taskId = id;
+      return refs;
+    });
+    const origin = el.viewport.getBoundingClientRect();
+    for (const refs of unitNodes) {
+      if (ids.includes(refs.taskId)) continue;
+      if (animate) exitUnit(refs, before.get(refs.taskId), origin, opacity.get(refs.taskId));
+      else refs.root.remove();
+    }
+    next.forEach((refs, index) => {
+      const current = el.units.children[index];
+      if (current !== refs.root) el.units.insertBefore(refs.root, current || null);
+    });
+    unitNodes = next;
+    if (!animate) return next;
+
+    const after = new Map(next.map((refs) => [refs.taskId, refs.root.getBoundingClientRect()]));
+    const shifts = next.filter((refs) => before.has(refs.taskId))
+      .map((refs) => before.get(refs.taskId).left - after.get(refs.taskId).left);
+    const entryOffset = shifts.find((shift) => Math.abs(shift) > 0.5)
+      || parseFloat(getComputedStyle(el.units).getPropertyValue("--card-width"));
+    for (const refs of next) {
+      const old = before.get(refs.taskId);
+      const target = after.get(refs.taskId);
+      if (old) {
+        const dx = old.left - target.left;
+        const dy = old.top - target.top;
+        const alpha = opacity.get(refs.taskId);
+        if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5 || alpha < 0.999) {
+          animateCard(refs, [
+            { transform: `translate(${dx}px, ${dy}px)`, opacity: alpha },
+            { transform: "translate(0, 0)", opacity: 1 },
+          ]);
+        }
+      } else {
+        animateCard(refs, [
+          { transform: `translateX(${refs.taskId === null ? 16 : entryOffset}px)`, opacity: 0.55 },
+          { transform: "translateX(0)", opacity: 1 },
+        ]);
+      }
+    }
+    const width = parseFloat(el.viewport.style.width);
+    if (Math.abs(previousWidth - width) > 0.5) {
+      const animation = el.viewport.animate([{ width: `${previousWidth}px` }, { width: `${width}px` }], {
+        duration: 320, delay: 35, easing: "cubic-bezier(.16,1,.3,1)", fill: "backwards",
+      });
+      viewportMotion = animation;
+      const release = () => {
+        if (viewportMotion === animation) viewportMotion = null;
+      };
+      animation.finished.then(release, release);
+    }
+    return next;
   }
 
   function pendingTasks() {
@@ -376,8 +505,9 @@
   }
 
   function renderUnits(view, pending, immediate) {
+    const previousWidth = el.viewport.getBoundingClientRect().width;
     const list = computeUnits(pending);
-    const nodes = ensureUnits(Math.max(1, list.length));
+    const nodes = ensureUnits(list, immediate, previousWidth);
     nodes.forEach((refs, index) => {
       const task = list[index] || null;
       refs.taskId = task ? task.id : null;
@@ -387,9 +517,10 @@
       const target = unitTarget(view, task);
       refs.root.classList.toggle("overdue", target.overdue);
       if (refs.titleText !== target.title) {
+        const firstTitle = refs.titleText === "";
         refs.titleText = target.title;
         refs.title.title = target.title;
-        animateUnitTitle(refs.title, target.title, immediate);
+        animateUnitTitle(refs.title, target.title, immediate || firstTitle);
       }
       const key = `${target.elapsed}|${target.estimate}|${target.status}|${target.statusClass}|${target.mode}|${target.progress.toFixed(4)}`;
       if (refs.key !== key) {
@@ -593,6 +724,7 @@
 
   function collapse() {
     if (collapsed) return;
+    stopCardMotion();
     collapsed = true;
     trace("collapse start");
     // hide the line right away: while the window is still tall it must not be
@@ -700,7 +832,7 @@
     plan = fresh;
     rollPlanDate();
     lastSnapshot = serialize();
-    render(computeView(), true);
+    render(computeView(), false);
   }
 
   // ------------------------------------------------------------------- demo

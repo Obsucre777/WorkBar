@@ -155,6 +155,11 @@ function bootstrap() {
   };
   // Keep test fixtures deterministic; native events remain available explicitly.
   window.setInterval = () => 0;
+  const nativeMatchMedia = window.matchMedia.bind(window);
+  const cardMotion = window.parent.__fixtureCardMotion === true;
+  window.matchMedia = (query) => query === '(prefers-reduced-motion: reduce)'
+    ? { matches: !cardMotion }
+    : nativeMatchMedia(query);
   const style = document.createElement('style');
   style.textContent = '*, *::before, *::after { transition: none !important; animation: none !important; }';
   document.head.append(style);
@@ -167,10 +172,11 @@ async function runInBrowser() {
     checks.push({ name: message, ok: Boolean(condition) });
     if (!condition) throw new Error(message);
   };
-  async function fixture(scene, restoredPlan = null, clock = null) {
+  async function fixture(scene, restoredPlan = null, clock = null, cardMotion = false) {
     if (frame) frame.remove();
     window.__fixturePlan = restoredPlan;
     window.__fixtureClock = clock;
+    window.__fixtureCardMotion = cardMotion;
     frame = document.createElement('iframe');
     frame.style.cssText = 'width:1128px;height:100px;border:0';
     const loaded = new Promise((resolve, reject) => {
@@ -389,13 +395,13 @@ async function runInBrowser() {
     }
 
     view = await fixture('reuse');
-    const reused = view.unit('a');
+    const reused = view.unit('b');
     const next = view.win.__smoke.getPlan();
     next.current_id = 'b';
     next.tasks = next.tasks.filter((task) => task.id !== 'a');
     next.tasks.push({ id: 'd', title: 'replacement', timer: 'down', est_min: 5, spent_sec: 0, running: false });
     await view.win.__smoke.setPlan(next);
-    assert('renderer reuses task nodes', view.unit('b') === reused);
+    assert('renderer preserves each task node when an earlier task is removed', view.unit('b') === reused);
     assert('reused node clears obsolete overdue style and keeps its task colour', view.color('b', '.ring-fill', 'stroke') === identity.b && view.color('b', '.elapsed', 'color') === normalTime);
     assert('reused node clears obsolete warning dot', view.color('b', '.pulse', 'backgroundColor') === running && view.color('b', '.pulse', 'opacity') === '1');
     assert('reused running node has full ring brightness', view.color('b', '.ring-fill', 'opacity') === '1');
@@ -507,7 +513,7 @@ async function runInBrowser() {
 
     // Navigation changes only the viewed window; task state and colours belong
     // to the tasks, including the running tasks outside that window.
-    const visibleTasks = () => [...view.doc.querySelectorAll('.unit')].map((node) => node.dataset.id);
+    const visibleTasks = () => [...view.doc.querySelectorAll('#units > .unit')].map((node) => node.dataset.id);
     const previousTasks = () => view.doc.getElementById('previousTasks');
     const nextTasks = () => view.doc.getElementById('nextTasks');
     function fixedCards(label) {
@@ -660,6 +666,95 @@ async function runInBrowser() {
     fixedPlan.tasks = fixedPlan.tasks.filter((task) => task.id === firstCompletedId);
     await view.win.__smoke.setPlan(fixedPlan);
     unchangedColours('only one original task remains');
+
+    // Freeze actual Web Animations at explicit timeline positions, rather than
+    // sleeping, to inspect completion motion and rapid interruptions reliably.
+    function pauseCardAnimations() {
+      const animations = view.doc.getAnimations();
+      for (const animation of animations) {
+        animation.pause();
+        animation.currentTime = 0;
+      }
+      return animations;
+    }
+    async function finishCardAnimations() {
+      const animations = view.doc.getAnimations();
+      for (const animation of animations) animation.finish();
+      await Promise.all(animations.map((animation) => animation.finished));
+      await settled();
+    }
+    const fiveTasks = { ...pagingPlan, tasks: pagingPlan.tasks.slice(0, 5) };
+    view = await fixture('paging', fiveTasks, null, true);
+    const movingB = view.unit('b');
+    const movingC = view.unit('c');
+    const bOriginalRect = movingB.getBoundingClientRect();
+    const bOriginalStroke = view.color('b', '.ring-fill', 'stroke');
+    view.unit('a').querySelector('.done').click();
+    pauseCardAnimations();
+    const bMove = movingB.getAnimations()[0];
+    const eMove = view.unit('e').getAnimations()[0];
+    assert('completion updates task state without waiting for motion', view.win.__smoke.getPlan().tasks.find((task) => task.id === 'a').done && !view.unit('a'));
+    assert('completion retains the actual following task nodes', view.unit('b') === movingB && view.unit('c') === movingC);
+    assert('following cards have a real position animation', Boolean(bMove) && bMove.effect.getKeyframes()[0].transform.includes('240'));
+    assert('following card starts at its old painted position', Math.abs(movingB.getBoundingClientRect().left - bOriginalRect.left) < 0.1);
+    assert('fifth task enters from beyond the right edge', Boolean(eMove) && view.unit('e').getBoundingClientRect().left >= view.doc.getElementById('taskViewport').getBoundingClientRect().right - 0.1);
+    assert('completion does not replay a title fade on following cards', movingB.querySelector('.title').getAnimations().length === 0);
+    const exiting = view.doc.querySelector('.unit-exit');
+    assert('outgoing card is only a noninteractive visual', Boolean(exiting) && exiting.inert && exiting.getAttribute('aria-hidden') === 'true' && view.win.getComputedStyle(exiting).pointerEvents === 'none');
+    bMove.currentTime = bMove.effect.getTiming().delay + Number(bMove.effect.getTiming().duration) / 2;
+    const bMidpoint = movingB.getBoundingClientRect().left;
+    assert('following card moves continuously through an intermediate position', bMidpoint < bOriginalRect.left && bMidpoint > bOriginalRect.left - 240);
+    const cBeforeSecondCompletion = movingC.getBoundingClientRect().left;
+    view.unit('b').querySelector('.done').click();
+    pauseCardAnimations();
+    await settled();
+    assert('a second task can finish while the first motion is in progress', view.win.__smoke.getPlan().tasks.filter((task) => ['a', 'b'].includes(task.id)).every((task) => task.done && !task.running));
+    assert('interrupted motion continues from the currently painted position', view.unit('c') === movingC && Math.abs(movingC.getBoundingClientRect().left - cBeforeSecondCompletion) < 0.1);
+    assert('active cards remain separate from outgoing visuals', visibleTasks().join('') === 'cde');
+    await finishCardAnimations();
+    assert('all outgoing visuals are cleaned up when motion finishes', !view.doc.querySelector('.unit-exit'));
+    assert('width contracts to three fixed cards after consecutive completion', view.doc.getElementById('taskViewport').getBoundingClientRect().width === 720);
+    fixedCards('after animated consecutive completion');
+    assert('paused task keeps its state during animated reflow', view.unit('c').querySelector('.ring').dataset.mode === 'paused');
+
+    view = await fixture('paging', fiveTasks, null, true);
+    const middleA = view.unit('a');
+    const middleC = view.unit('c');
+    view.unit('b').querySelector('.done').click();
+    pauseCardAnimations();
+    assert('middle completion preserves every surviving card', view.unit('a') === middleA && view.unit('c') === middleC && visibleTasks().join('') === 'acde');
+    assert('a card before the removed card does not animate unnecessarily', middleA.getAnimations().length === 0);
+    await finishCardAnimations();
+    assert('animated completion keeps the task identity colour', view.color('a', '.ring-fill', 'stroke') === identity.a && bOriginalStroke === identity.b);
+
+    view = await fixture('paging', null, null, true);
+    view.unit('a').querySelector('.done').click();
+    pauseCardAnimations();
+    nextTasks().click();
+    assert('navigation can interrupt completion motion immediately', visibleTasks().join('') === 'cdef' && !view.doc.querySelector('.unit-exit'));
+    assert('navigation releases obsolete motion effects', view.doc.getAnimations().length === 0);
+    view.unit('c').querySelector('.done').click();
+    pauseCardAnimations();
+    view.doc.getElementById('collapse').click();
+    await settled();
+    assert('collapse cancels completion overlays and motion safely', !view.doc.querySelector('.unit-exit') && view.doc.getAnimations().length === 0);
+    view.doc.getElementById('slim').click();
+    await settled();
+    assert('expanding after interrupted motion shows the surviving tasks', !view.unit('a') && !view.unit('c') && visibleTasks().length === 4);
+
+    view = await fixture('paging', fiveTasks, null, true);
+    const remoteB = view.unit('b');
+    const remoteCompleted = view.win.__smoke.getPlan();
+    remoteCompleted.tasks.find((task) => task.id === 'a').done = true;
+    await view.win.__smoke.setPlan(remoteCompleted);
+    pauseCardAnimations();
+    assert('external task completion uses the same smooth motion', view.unit('b') === remoteB && remoteB.getAnimations().length > 0);
+    await finishCardAnimations();
+
+    view = await fixture('paging', fiveTasks);
+    const reducedB = view.unit('b');
+    view.unit('a').querySelector('.done').click();
+    assert('reduced-motion mode preserves task nodes without animated overlays', view.unit('b') === reducedB && !view.doc.querySelector('.unit-exit') && view.doc.getAnimations().length === 0);
   } catch (error) {
     checks.push({ name: error.stack || String(error), ok: false });
   }
