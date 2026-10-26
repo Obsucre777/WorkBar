@@ -344,7 +344,7 @@ fn configure_overlay_frame(hwnd: windows::Win32::Foundation::HWND) -> Result<(),
     use windows::Win32::UI::Shell::SetWindowSubclass;
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, GWL_EXSTYLE,
-        SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE,
+        HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE,
     };
     unsafe {
         if !SetWindowSubclass(hwnd, Some(overlay_frame_proc), OVERLAY_FRAME_SUBCLASS, 0).as_bool() {
@@ -360,8 +360,8 @@ fn configure_overlay_frame(hwnd: windows::Win32::Foundation::HWND) -> Result<(),
                 }
             }
         }
-        SetWindowPos(hwnd, None, 0, 0, 0, 0,
-            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
             .map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -369,6 +369,25 @@ fn configure_overlay_frame(hwnd: windows::Win32::Foundation::HWND) -> Result<(),
 
 #[cfg(windows)]
 const OVERLAY_FRAME_SUBCLASS: usize = 0x5742;
+
+/// The framework caches `always_on_top`; setting true again can be a no-op
+/// even when the HWND's real Z order no longer matches that cached value.
+/// Use SetWindowPos to restore the actual order without activating the bar.
+fn keep_overlay_on_top(window: &WebviewWindow) {
+    #[cfg(windows)]
+    let result = window.hwnd().map_err(|error| error.to_string()).and_then(|hwnd| {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE,
+        };
+        unsafe {
+            SetWindowPos(windows::Win32::Foundation::HWND(hwnd.0), HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE).map_err(|error| error.to_string())
+        }
+    });
+    #[cfg(not(windows))]
+    let result = window.set_always_on_top(true).map_err(|error| error.to_string());
+    if let Err(error) = result { trace(&format!("restore topmost failed: {error}")); }
+}
 
 #[cfg(windows)]
 fn overlay_style(index: i32, style: u32) -> u32 {
@@ -387,10 +406,23 @@ unsafe extern "system" fn overlay_frame_proc(
     id: usize, _data: usize,
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
-    use windows::Win32::UI::WindowsAndMessaging::{STYLESTRUCT, WM_STYLECHANGING, WM_NCDESTROY};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        STYLESTRUCT, WINDOWPOS, WM_STYLECHANGING, WM_WINDOWPOSCHANGING, WM_NCDESTROY,
+        HWND_TOPMOST, SWP_NOZORDER, SWP_SHOWWINDOW, SWP_NOACTIVATE,
+    };
     if message == WM_STYLECHANGING && lparam.0 != 0 {
         let styles = &mut *(lparam.0 as *mut STYLESTRUCT);
         styles.styleNew = overlay_style(wparam.0 as i32, styles.styleNew);
+    } else if message == WM_WINDOWPOSCHANGING && lparam.0 != 0 {
+        let position = &mut *(lparam.0 as *mut WINDOWPOS);
+        // ShowWindow / framework style refreshes can keep WS_EX_TOPMOST
+        // while inserting the HWND among ordinary windows. Protect the real
+        // order on show and on every requested reorder. Leave geometry-only
+        // changes alone so animations do not continually raise the window.
+        if !position.flags.contains(SWP_NOZORDER) || position.flags.contains(SWP_SHOWWINDOW) {
+            position.hwndInsertAfter = HWND_TOPMOST;
+            position.flags = (position.flags & !SWP_NOZORDER) | SWP_NOACTIVATE;
+        }
     } else if message == WM_NCDESTROY {
         let _ = RemoveWindowSubclass(hwnd, Some(overlay_frame_proc), id);
     }
@@ -447,7 +479,7 @@ fn apply_bar_state_later(app: AppHandle, requested: bool) {
             std::thread::sleep(Duration::from_millis(60));
             let _ = window.set_position(position);
         }
-        let _ = window.set_always_on_top(true);
+        keep_overlay_on_top(&window);
         state.applied.store(desired, Ordering::SeqCst);
         trace(&format!("apply {desired} done"));
         // A task-count update can arrive during the off-screen repaint. Fit
@@ -527,7 +559,7 @@ fn set_bar_state(app: &AppHandle, window: &WebviewWindow, collapsed: bool) {
     // WebView2 versions paint the resized surface with an opaque black band.
     let _ = window.set_background_color(Some(tauri::utils::config::Color(0, 0, 0, 0)));
     let _ = window.show();
-    let _ = window.set_always_on_top(true);
+    keep_overlay_on_top(window);
     let _ = app.emit("mode-changed", collapsed);
 }
 
@@ -823,10 +855,10 @@ fn main() {
             let _ = window.set_background_color(Some(tauri::utils::config::Color(0, 0, 0, 0)));
             eprintln!("[workbar] setup: placed");
             eprintln!("[workbar] setup: non-activating");
-            let _ = window.set_always_on_top(true);
-            eprintln!("[workbar] setup: topmost");
             let _ = window.show();
             eprintln!("[workbar] setup: shown");
+            keep_overlay_on_top(&window);
+            eprintln!("[workbar] setup: topmost");
 
             shortcut_settings::initialize(app.handle());
 
@@ -863,6 +895,46 @@ fn main() {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn overlay_remains_topmost_when_shown_or_reordered_without_taking_focus() {
+        use windows::core::w;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        unsafe {
+            let hwnd = CreateWindowExW(WS_EX_TOPMOST, w!("STATIC"), w!("Workbar topmost test"), WS_POPUP,
+                -10000, -10000, 100, 20, None, None, None, None).unwrap();
+            struct TestWindow(windows::Win32::Foundation::HWND);
+            impl Drop for TestWindow { fn drop(&mut self) { unsafe { let _ = DestroyWindow(self.0); } } }
+            let window = TestWindow(hwnd);
+            let foreground = GetForegroundWindow();
+            configure_overlay_frame(window.0).unwrap();
+            // Reproduce native demotion, then the framework's cached style
+            // refresh and non-activating show. The native Z order must win.
+            for after in [HWND_NOTOPMOST, HWND_BOTTOM, HWND_TOP] {
+                SetWindowPos(hwnd, after, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE).unwrap();
+                assert_ne!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0, 0);
+            }
+            for _ in 0..3 {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (WS_EX_WINDOWEDGE | WS_EX_TOPMOST).0 as isize);
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                assert_ne!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0, 0);
+                // EnumWindows/GetWindow reflect real ordering, unlike the
+                // style bit alone, which can be stale after a style rewrite.
+                let mut above = GetWindow(hwnd, GW_HWNDPREV).unwrap_or_default();
+                while !above.0.is_null() {
+                    if IsWindowVisible(above).as_bool() {
+                        assert_ne!(GetWindowLongPtrW(above, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0, 0,
+                            "a normal window is above the overlay");
+                    }
+                    above = GetWindow(above, GW_HWNDPREV).unwrap_or_default();
+                }
+                assert_eq!(GetForegroundWindow(), foreground);
+            }
+        }
+    }
 
     #[test]
     fn compact_width_tracks_visible_tasks_without_reserved_arrow_space() {

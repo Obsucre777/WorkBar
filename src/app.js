@@ -481,8 +481,8 @@
       return {
         title: complete ? "今天的工作都完成了" : "今天还没有计划",
         elapsed: "",
-        estimate: complete ? `完成 ${view.doneCount} 项` : "等待 AI 排计划",
-        status: complete ? "休息一下" : "用 AI 说一句就能排",
+        estimate: complete ? `完成 ${view.doneCount} 项` : "用AI排一下计划吧",
+        status: complete ? "休息一下" : "",
         statusClass: "",
         overdue: false,
         progress: complete ? 1 : 0,
