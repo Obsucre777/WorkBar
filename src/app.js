@@ -128,15 +128,6 @@
     return (hash >>> 0) % TASK_COLOR_COUNT;
   }
 
-  function compareTasks(a, b) {
-    const sa = hhmmToMin(a.start);
-    const sb = hhmmToMin(b.start);
-    if (sa === null && sb === null) return a.id.localeCompare(b.id);
-    if (sa === null) return 1;
-    if (sb === null) return -1;
-    return sa - sb || a.id.localeCompare(b.id);
-  }
-
   function computeView() {
     const tasks = plan.tasks || [];
     const pending = tasks.filter((t) => !t.done);
@@ -375,7 +366,8 @@
   }
 
   function pendingTasks() {
-    return (plan.tasks || []).filter((task) => !task.done).sort(compareTasks);
+    // Persisted array order is the queue, including explicit user moves.
+    return (plan.tasks || []).filter((task) => !task.done);
   }
 
   /** Keep card dimensions fixed; smaller screens show fewer whole cards. */
@@ -408,7 +400,7 @@
     } else {
       const survivor = visibleIds.find((id) => indices.has(id));
       windowStart = survivor === undefined
-        ? Math.max(0, pending.findIndex(hasStarted))
+        ? 0
         : indices.get(survivor);
     }
     windowStart = Math.max(0, Math.min(windowStart, pending.length - capacity));

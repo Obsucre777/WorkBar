@@ -193,9 +193,10 @@ fn sort_key(task: &Task) -> u32 {
         .unwrap_or(24 * 60 + 1)
 }
 
-/// Stable order: by start time, then by creation/id.
+/// Explicit schedule sort only. Equal start times (including absent times)
+/// keep their queue order; task ids never imply creation order.
 pub fn sort_tasks(tasks: &mut [Task]) {
-    tasks.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)).then_with(|| a.id.cmp(&b.id)));
+    tasks.sort_by_key(sort_key);
 }
 
 // ---------------------------------------------------------------------------
@@ -353,7 +354,7 @@ where
         plan.date = today();
     }
     mutate(&mut plan)?;
-    sort_tasks(&mut plan.tasks);
+    // The array is the queue order. Normal edits must never reorder tasks.
     plan.updated_at = Some(chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string());
     save_unlocked(&plan)?;
     Ok(plan)
@@ -426,6 +427,21 @@ pub fn summarize(plan: &Plan) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_time_sort_preserves_equal_time_and_unscheduled_queue_order() {
+        let mut tasks = vec![
+            Task { id: "z".into(), start: Some("09:00".into()), running: true, spent_sec: 17, ..Task::default() },
+            Task { id: "q".into(), ..Task::default() },
+            Task { id: "a".into(), start: Some("09:00".into()), ..Task::default() },
+            Task { id: "m".into(), start: Some("08:00".into()), ..Task::default() },
+            Task { id: "b".into(), ..Task::default() },
+        ];
+        sort_tasks(&mut tasks);
+        assert_eq!(tasks.iter().map(|task| task.id.as_str()).collect::<Vec<_>>(), ["m", "z", "a", "q", "b"]);
+        assert!(tasks[1].running);
+        assert_eq!(tasks[1].spent_sec, 17);
+    }
 
     #[test]
     fn paused_state_is_backward_compatible_and_survives_round_trip() {

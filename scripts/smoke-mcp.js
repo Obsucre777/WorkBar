@@ -94,7 +94,7 @@ function textOf(response) {
 
     const tools = await request('tools/list', {});
     const names = (tools.result && tools.result.tools ? tools.result.tools : []).map((t) => t.name);
-    check('tools/list has 10 tools', names.length === 10, names.join(','));
+    check('tools/list has 11 tools including explicit reordering', names.length === 11 && names.includes('workbar_reorder_tasks'), names.join(','));
 
     const plan = await request('tools/call', {
       name: 'workbar_plan_day',
@@ -165,7 +165,74 @@ function textOf(response) {
       check('clear_day', !cleared.error && textOf(cleared).includes('(no tasks yet'));
     }
 
-    const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'plan.json'), 'utf8'));
+    const readPlan = () => JSON.parse(fs.readFileSync(path.join(dataDir, 'plan.json'), 'utf8'));
+    const titles = () => readPlan().tasks.map((task) => task.title).join('|');
+    const ids = () => readPlan().tasks.map((task) => task.id);
+    const idOf = (title) => readPlan().tasks.find((task) => task.title === title).id;
+    const taskStates = () => JSON.stringify(readPlan().tasks.slice().sort((a, b) => a.id.localeCompare(b.id)));
+    const call = async (name, args) => {
+      const result = await request('tools/call', { name, arguments: args });
+      if (result.error || result.result?.isError) throw new Error(`${name}: ${textOf(result)}`);
+      return result;
+    };
+    const rejectsUnchanged = async (name, args, label) => {
+      const before = JSON.stringify(readPlan());
+      const result = await request('tools/call', { name, arguments: args });
+      check(label, result.result?.isError === true && JSON.stringify(readPlan()) === before);
+    };
+
+    await call('workbar_plan_day', { tasks: [
+      { title: 'late', start: '23:59', paused: true },
+      { title: 'early', start: '00:01', paused: true },
+      { title: 'loose-z' }, { title: 'loose-a' },
+    ] });
+    check('plan preserves supplied queue order regardless of schedule', titles() === 'late|early|loose-z|loose-a');
+    await call('workbar_add_tasks', { tasks: [
+      { title: 'batch-first', start: '00:00', paused: true }, { title: 'batch-second' },
+    ] });
+    const appended = titles();
+    check('batch addition appends in input order even with an earlier start', appended === 'late|early|loose-z|loose-a|batch-first|batch-second');
+    await call('workbar_update_task', { id: idOf('late'), start: '00:02', running: false });
+    await call('workbar_set_current', { id: idOf('loose-a') });
+    await call('workbar_update_task', { id: idOf('loose-a'), running: false });
+    check('changing schedule, starting and pausing preserve queue order', titles() === appended);
+    await call('workbar_complete_task', { id: idOf('early') });
+    check('completion preserves surviving queue order', readPlan().tasks.filter((task) => !task.done).map((task) => task.title).join('|') === 'late|loose-z|loose-a|batch-first|batch-second');
+    await call('workbar_update_task', { id: idOf('early'), done: false });
+    check('reopening a task restores its previous queue position', titles() === appended);
+    await call('workbar_start_work', { title: 'queue-session' });
+    check('AI work sessions also append at the end', readPlan().tasks.at(-1).title === 'queue-session');
+    await call('workbar_finish_work', { id: idOf('queue-session') });
+    await call('workbar_add_tasks', { tasks: [{ title: 'front-one' }, { title: 'front-two' }], position: 'first' });
+    check('explicit front insertion preserves batch order', titles().startsWith('front-one|front-two|'));
+    await call('workbar_add_tasks', { tasks: [{ title: 'middle-one' }, { title: 'middle-two' }], after_id: idOf('loose-z') });
+    check('explicit after insertion keeps a batch consecutive', titles().includes('loose-z|middle-one|middle-two|loose-a'));
+    const beforeMove = taskStates();
+    await call('workbar_update_task', { id: idOf('batch-second'), position: 'first' });
+    await call('workbar_update_task', { id: idOf('front-one'), after_id: idOf('front-two') });
+    await call('workbar_update_task', { id: idOf('front-two'), position: 'last' });
+    check('explicit front, after and end moves preserve every task state', readPlan().tasks[0].title === 'batch-second' && readPlan().tasks.at(-1).title === 'front-two' && taskStates() === beforeMove);
+    await rejectsUnchanged('workbar_add_tasks', { tasks: [{ title: 'invalid' }], after_id: 'missing' }, 'invalid insertion leaves plan untouched');
+    await rejectsUnchanged('workbar_update_task', { id: idOf('late'), title: 'invalid rename', after_id: 'missing' }, 'invalid move rolls back other edits');
+    await rejectsUnchanged('workbar_update_task', { id: idOf('late'), after_id: idOf('late') }, 'reject moving a task after itself');
+    await rejectsUnchanged('workbar_update_task', { id: idOf('late'), position: 'first', after_id: idOf('early') }, 'reject conflicting placement options');
+    await rejectsUnchanged('workbar_reorder_tasks', { task_ids: [idOf('late'), idOf('late')] }, 'reject duplicate reorder ids');
+    await rejectsUnchanged('workbar_reorder_tasks', { task_ids: ['missing'] }, 'reject unknown reorder ids');
+    await rejectsUnchanged('workbar_reorder_tasks', { task_ids: [] }, 'reject empty reorder list');
+    await rejectsUnchanged('workbar_reorder_tasks', { task_ids: [idOf('late')], by: 'start_time' }, 'reject conflicting reorder options');
+    const beforeReorder = ids();
+    const requested = [idOf('batch-first'), idOf('early')];
+    await call('workbar_reorder_tasks', { task_ids: requested });
+    check('explicit id ordering preserves the relative order of unlisted tasks', JSON.stringify(ids()) === JSON.stringify([...requested, ...beforeReorder.filter((id) => !requested.includes(id))]));
+    const beforeTimeSort = readPlan().tasks;
+    const minutes = (task) => task.start ? Number(task.start.split(':')[0]) * 60 + Number(task.start.split(':')[1]) : 1441;
+    const expectedTimeSort = beforeTimeSort.slice().sort((a, b) => minutes(a) - minutes(b)).map((task) => task.id);
+    await call('workbar_reorder_tasks', { by: 'start_time' });
+    check('time sorting happens only when explicitly requested and keeps ties stable', JSON.stringify(ids()) === JSON.stringify(expectedTimeSort) && taskStates() === beforeMove);
+    await call('workbar_add_tasks', { tasks: [{ title: 'new-after-sort', start: '00:00', paused: true }] });
+    check('adding after an explicit time sort still appends normally', readPlan().tasks.at(-1).title === 'new-after-sort');
+    await call('workbar_clear_day', {});
+    const raw = readPlan();
     check('plan.json is valid JSON with date', typeof raw.date === 'string' && raw.date.length === 10);
   } catch (err) {
     console.error('ERROR', err.message);

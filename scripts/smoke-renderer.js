@@ -629,6 +629,42 @@ async function runInBrowser() {
       }
     }
     view = await fixture('paging');
+    const queueBase = view.win.__smoke.getPlan();
+    const queueIds = ['z', 'a', 'm', 'b', 'y'];
+    view = await fixture('paging', { ...queueBase, tasks: queueIds.map((id, index) => ({
+      id, title: id, timer: 'up', start: index % 2 ? '23:58' : '23:59', spent_sec: 0, running: false,
+    })) });
+    assert('queue uses input order instead of ids or scheduled times', visibleTasks().join(',') === 'z,a,m,b');
+    let queuePlan = view.win.__smoke.getPlan();
+    queuePlan.tasks.push(
+      { id: '00', title: 'new first in batch', timer: 'up', start: '00:00', paused: true, spent_sec: 0, running: false },
+      { id: '01', title: 'new second in batch', timer: 'up', spent_sec: 0, running: false },
+    );
+    await view.win.__smoke.setPlan(queuePlan);
+    assert('adding tasks preserves the current view', visibleTasks().join(',') === 'z,a,m,b');
+    for (let index = 0; index < 3; index += 1) nextTasks().click();
+    assert('new low-id tasks appear at the tail in input order', visibleTasks().join(',') === 'b,y,00,01');
+    for (let index = 0; index < 3; index += 1) previousTasks().click();
+    queuePlan = view.win.__smoke.getPlan();
+    queuePlan.tasks[0].start = '00:00';
+    queuePlan.tasks[0].paused = true;
+    await view.win.__smoke.setPlan(queuePlan);
+    view.unit('a').querySelector('.ring').click();
+    await settled();
+    view.unit('a').querySelector('.ring').click();
+    await settled();
+    assert('time edits and timer toggles never move cards', visibleTasks().join(',') === 'z,a,m,b');
+    view.unit('m').querySelector('.done').click();
+    await settled();
+    assert('completion fills the queue gap without reordering survivors', visibleTasks().join(',') === 'z,a,b,y');
+    view = await fixture('paging', view.win.__smoke.getPlan());
+    assert('queue order survives a renderer reload', visibleTasks().join(',') === 'z,a,b,y');
+    queuePlan = view.win.__smoke.getPlan();
+    queuePlan.tasks.reverse();
+    view = await fixture('paging', queuePlan);
+    assert('an explicitly reordered queue is displayed in its saved order', visibleTasks().join(',') === '01,00,y,b');
+
+    view = await fixture('paging');
     const pagingPlan = view.win.__smoke.getPlan();
     for (const count of [1, 2, 3, 4]) {
       view = await fixture('paging', { ...pagingPlan, tasks: pagingPlan.tasks.slice(0, count) });
@@ -676,7 +712,7 @@ async function runInBrowser() {
     const inserted = view.win.__smoke.getPlan();
     inserted.tasks.push({ id: '00', title: '新加的未开始任务', timer: 'up', spent_sec: 0, running: false });
     await view.win.__smoke.setPlan(inserted);
-    assert('inserting an earlier task preserves the visible anchor', visibleTasks().join('') === 'bcde');
+    assert('appending a low-id task preserves the visible anchor', visibleTasks().join('') === 'bcde');
     view.unit('e').querySelector('.ring').click();
     await settled();
     const pausedOnPage = view.win.__smoke.getPlan();
@@ -701,9 +737,9 @@ async function runInBrowser() {
     assert('collapse and expand preserve the browsed window', visibleTasks().join('') === 'bcde');
     const onlyLastRunning = { ...pagingPlan, tasks: pagingPlan.tasks.map((task) => ({ ...task, running: task.id === 'h', paused: false, spent_sec: task.id === 'h' ? 60 : 0 })) };
     view = await fixture('paging', onlyLastRunning);
-    assert('initial window keeps an already running task visible', Boolean(view.unit('h')));
-    for (let index = 0; index < 4; index += 1) previousTasks().click();
-    assert('navigation can reach all earlier unstarted tasks', visibleTasks().join('') === 'abcd');
+    assert('initial window starts at the queue front even when a later task is running', visibleTasks().join('') === 'abcd');
+    for (let index = 0; index < 4; index += 1) nextTasks().click();
+    assert('navigation can reach the later running task without promoting it', Boolean(view.unit('h')));
 
     // Reproduce the position-based colour bug with opaque ids, then verify the
     // same identities after completion, deletion, sorting and a full reload.
@@ -757,7 +793,7 @@ async function runInBrowser() {
     view = await fixture('paging', view.win.__smoke.getPlan());
     unchangedColours('full renderer reload');
     fixedPlan = view.win.__smoke.getPlan();
-    fixedPlan.tasks.push({ id: '000new', title: '新加在前面的任务', timer: 'up', spent_sec: 1, running: true });
+    fixedPlan.tasks.unshift({ id: '000new', title: '新加在前面的任务', timer: 'up', spent_sec: 1, running: true });
     fixedPlan.tasks.push({ id: firstCompletedId, title: '重新打开原来的任务', timer: 'up', spent_sec: 60, running: true });
     await view.win.__smoke.setPlan(fixedPlan);
     unchangedColours('new task inserted and completed task reopened');

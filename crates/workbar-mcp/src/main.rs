@@ -150,7 +150,7 @@ fn initialize_result(params: &Value) -> Value {
 \n\nWorkflow rules:\n\
 1. Call workbar_get_today before reading or editing so you reuse existing task ids and see which task the bar is showing.\n\
 2. workbar_plan_day replaces the whole day — use it only when starting or fully re-planning the day.\n\
-3. workbar_add_tasks appends; workbar_update_task moves/renames one task; prefer these over re-creating the day.\n\
+3. Queue order is stable: workbar_add_tasks appends in supplied order; editing times or timer states never reorders tasks. Only when explicitly requested, use position='first'/'last' or after_id on add/update, or workbar_reorder_tasks with task_ids / by='start_time'. Prefer these over re-creating the day.\n\
 4. Times are local HH:mm (24h). One task = one short piece of work; titles must be short (<= 14 Chinese chars / ~40 latin chars) because the bar is tiny; prefer 3-8 tasks per day. A task with an estimate or a time window counts down against it; a task with neither is an open-ended stopwatch (timer 'up', ring laps once per hour).\n\
 5. After a write, reply with one short confirmation line. The bar updates in under a second; there is no need to echo the whole plan.\n\
 6. Tasks may run in parallel. Starting, pausing, or finishing one task never changes another task. Set running=true to start a task and running=false to explicitly pause it.\n\
@@ -248,7 +248,7 @@ fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "workbar_plan_day",
             "title": "Replace today's plan",
-            "description": "Write a complete day plan, replacing all tasks. Use when the user asks to plan their day, or says something like 'today I need to do X, Y, Z'. Provide short task titles and optional start/end times.",
+            "description": "Write a complete day plan, replacing all tasks in the supplied order. Use when the user asks to plan their day, or says something like 'today I need to do X, Y, Z'. Provide short task titles and optional start/end times; times do not change queue order.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -262,11 +262,13 @@ fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "workbar_add_tasks",
             "title": "Add tasks",
-            "description": "Append one or more tasks to today's plan without touching existing ones. Use for 'add a task', 'also remind me to...'.",
+            "description": "Append one or more tasks in supplied order without moving existing tasks or changing their states. Use position or after_id only when the user explicitly requests another placement. Times do not change queue order.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "tasks": { "type": "array", "items": task_schema(), "minItems": 1 }
+                    "tasks": { "type": "array", "items": task_schema(), "minItems": 1 },
+                    "position": { "type": "string", "enum": ["first", "last"], "description": "Explicitly insert this batch at the front or end. Omit to append. Cannot combine with after_id." },
+                    "after_id": { "type": "string", "description": "Explicitly insert this batch after an existing task id. Cannot combine with position." }
                 },
                 "required": ["tasks"],
                 "additionalProperties": false
@@ -275,7 +277,7 @@ fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "workbar_update_task",
             "title": "Update a task",
-            "description": "Change one task in place: title, time window, estimate, timer mode, note, running state, or done state. Use the id from workbar_get_today. Set running=true to start only this timer; running=false explicitly pauses it, including after a restart. Other tasks keep their own states.",
+            "description": "Change one task in place: title, time window, estimate, timer mode, note, running state, or done state. Times and state changes preserve queue order. Use position or after_id only for an explicitly requested move. Set running=true to start only this timer; running=false explicitly pauses it, including after a restart. Other tasks keep their own states.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -291,9 +293,24 @@ fn tool_definitions() -> Vec<Value> {
                     },
                     "note": { "type": ["string", "null"] },
                     "running": { "type": "boolean", "description": "Start or explicitly pause only this task's timer." },
-                    "done": { "type": "boolean" }
+                    "done": { "type": "boolean" },
+                    "position": { "type": "string", "enum": ["first", "last"], "description": "Explicitly move this task to the front or end. Cannot combine with after_id." },
+                    "after_id": { "type": "string", "description": "Explicitly move this task after another task id. Cannot combine with position." }
                 },
                 "required": ["id"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "workbar_reorder_tasks",
+            "title": "Explicitly reorder tasks",
+            "description": "Only when the user explicitly asks to reorder: supply task_ids to place those tasks first in that order (unlisted tasks retain their relative order), or by='start_time' to sort by scheduled start with unscheduled tasks last. Equal times keep their previous order. Supply exactly one of task_ids or by. Task data and timer states are preserved.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1, "uniqueItems": true },
+                    "by": { "type": "string", "enum": ["start_time"] }
+                },
                 "additionalProperties": false
             }
         }),
@@ -358,6 +375,7 @@ fn call_tool(params: &Value) -> Result<Value, RpcError> {
         "workbar_plan_day" => Ok(tool_plan_day(&args)),
         "workbar_add_tasks" => Ok(tool_add_tasks(&args)),
         "workbar_update_task" => Ok(tool_update_task(&args)),
+        "workbar_reorder_tasks" => Ok(tool_reorder_tasks(&args)),
         "workbar_set_current" => Ok(tool_set_current(&args)),
         "workbar_complete_task" => Ok(tool_complete_task(&args)),
         "workbar_remove_task" => Ok(tool_remove_task(&args)),
@@ -448,15 +466,95 @@ fn tool_add_tasks(args: &Value) -> Value {
         Ok(tasks) => tasks,
         Err(err) => return error_result(err),
     };
+    let placement = match parse_placement(args) {
+        Ok(value) => value,
+        Err(err) => return error_result(err),
+    };
     match workbar_core::update(|plan| {
         if plan.date.trim().is_empty() || plan.date != workbar_core::today() {
             plan.date = workbar_core::today();
             plan.current_id = None;
         }
-        plan.tasks.extend(tasks.clone());
+        insert_tasks(plan, tasks, placement)?;
         Ok(())
     }) {
         Ok(plan) => render(&plan, "已添加到今天的计划。"),
+        Err(err) => error_result(err),
+    }
+}
+
+enum Placement {
+    First,
+    Last,
+    After(String),
+}
+
+fn parse_placement(args: &Value) -> Result<Option<Placement>, String> {
+    match (args.get("position"), args.get("after_id")) {
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => Err("position 和 after_id 不能同时指定".into()),
+        (Some(value), None) => match value.as_str() {
+            Some("first") => Ok(Some(Placement::First)),
+            Some("last") => Ok(Some(Placement::Last)),
+            _ => Err("position 只能是 first 或 last".into()),
+        },
+        (None, Some(value)) => value.as_str().map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(|id| Some(Placement::After(id.to_string())))
+            .ok_or_else(|| "after_id 必须是非空任务 id".into()),
+    }
+}
+
+fn insert_tasks(plan: &mut Plan, tasks: Vec<Task>, placement: Option<Placement>) -> Result<(), String> {
+    let index = match placement {
+        Some(Placement::First) => 0,
+        Some(Placement::After(id)) => plan.tasks.iter().position(|task| task.id == id)
+            .map(|index| index + 1).ok_or_else(|| format!("找不到位置参照任务 {id}"))?,
+        None | Some(Placement::Last) => plan.tasks.len(),
+    };
+    plan.tasks.splice(index..index, tasks);
+    Ok(())
+}
+
+fn tool_reorder_tasks(args: &Value) -> Value {
+    let ids = match (args.get("task_ids"), args.get("by")) {
+        (None, Some(value)) if value.as_str() == Some("start_time") => None,
+        (Some(value), None) => {
+            let Some(values) = value.as_array().filter(|values| !values.is_empty()) else {
+                return error_result("task_ids 必须是非空 id 数组".into());
+            };
+            let mut ids = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for value in values {
+                let Some(id) = value.as_str().map(str::trim).filter(|id| !id.is_empty()) else {
+                    return error_result("task_ids 只能包含非空任务 id".into());
+                };
+                if !seen.insert(id.to_string()) {
+                    return error_result(format!("任务 id 重复：{id}"));
+                }
+                ids.push(id.to_string());
+            }
+            Some(ids)
+        }
+        _ => return error_result("请只指定 task_ids，或指定 by: start_time".into()),
+    };
+    match workbar_core::update(|plan| {
+        if let Some(ids) = ids {
+            let mut reordered = Vec::with_capacity(plan.tasks.len());
+            for id in &ids {
+                let task = plan.tasks.iter().find(|task| &task.id == id)
+                    .ok_or_else(|| format!("找不到任务 {id}"))?;
+                reordered.push(task.clone());
+            }
+            let selected: std::collections::HashSet<_> = ids.into_iter().collect();
+            reordered.extend(plan.tasks.iter().filter(|task| !selected.contains(&task.id)).cloned());
+            plan.tasks = reordered;
+        } else {
+            workbar_core::sort_tasks(&mut plan.tasks);
+        }
+        Ok(())
+    }) {
+        Ok(plan) => render(&plan, "已按要求调整任务顺序。"),
         Err(err) => error_result(err),
     }
 }
@@ -479,6 +577,13 @@ fn tool_update_task(args: &Value) -> Value {
         Ok(id) => id,
         Err(err) => return err,
     };
+    let placement = match parse_placement(args) {
+        Ok(value) => value,
+        Err(err) => return error_result(err),
+    };
+    if matches!(&placement, Some(Placement::After(after)) if after == &id) {
+        return error_result("不能将任务放到它自己后面".into());
+    }
     let result = workbar_core::update(|plan| {
         let task = plan
             .tasks
@@ -522,6 +627,11 @@ fn tool_update_task(args: &Value) -> Value {
         }
 
         normalize_task(task)?;
+        if placement.is_some() {
+            let index = plan.tasks.iter().position(|task| task.id == id).unwrap();
+            let task = plan.tasks.remove(index);
+            insert_tasks(plan, vec![task], placement)?;
+        }
         Ok(())
     });
     match result {
