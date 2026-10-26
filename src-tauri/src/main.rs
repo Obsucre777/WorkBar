@@ -8,7 +8,7 @@
 
 mod shortcut_settings;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{
@@ -39,10 +39,11 @@ const INSTANCE_MUTEX: &str = "Local\\io.workbar.desktop.single";
 /// Mirror of the bar's collapsed state. The web UI and native toggles (hotkey,
 /// tray) can both change it, so the current value must live where both reach it.
 /// `applied` is the state the window has actually been resized to; `operation`
-/// serializes the delayed appliers so the latest request always wins.
+/// serializes the window updates; `revision` cancels superseded fade waits.
 struct BarState {
     collapsed: AtomicBool,
     applied: AtomicBool,
+    revision: AtomicU64,
     operation: Mutex<()>,
 }
 
@@ -277,32 +278,34 @@ fn make_non_activating(window: &WebviewWindow) {
 /// browser flags do not fully cover, which used to stall the switch for
 /// seconds. Sleeping here keeps the actual resize off that path entirely.
 fn apply_bar_state_later(app: AppHandle, requested: bool) {
+    let revision = app.state::<BarState>().revision.fetch_add(1, Ordering::SeqCst) + 1;
     std::thread::spawn(move || {
         let state = app.state::<BarState>();
-        let _guard = state.operation.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         // Give the web UI's fade-out animation the time the CSS needs, so the
-        // resize lands on a page that already renders the target state.
+        // resize lands on a page that already renders the target state. Wait
+        // outside the lock: rapid toggles must not queue repeated fade delays.
         std::thread::sleep(Duration::from_millis(if requested { 300 } else { 180 }));
-        // Re-read after the wait: a rapid second toggle must win.
+        let _guard = state.operation.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.revision.load(Ordering::SeqCst) != revision {
+            trace(&format!("apply {requested} superseded revision={revision}"));
+            return;
+        }
         let desired = state.collapsed.load(Ordering::SeqCst);
         if state.applied.load(Ordering::SeqCst) == desired {
-            // Window is already in the desired shape (a rapid double toggle
-            // cancelled mid-flight), but the web UI may still be mid-animation
-            // waiting for the completion signal — send it anyway so its
-            // visuals converge; the handler ignores mismatched directions.
-            let _ = app.emit("bar-resized", desired);
+            trace(&format!("apply {desired} unchanged revision={revision}"));
             return;
         }
         let Some(window) = app.get_webview_window("main") else { return; };
-        trace(&format!("apply {desired} start"));
+        trace(&format!("apply {desired} start revision={revision}"));
         if let Some((size, position)) = bar_geometry(&window, desired) {
             // Park the window off-screen for the resize. Resizing a visible
             // transparent WebView2 window paints a black band for a few
             // frames, while hiding the HWND makes WebView2 suspend the
             // renderer and stall the toggle for seconds (traced in
             // trace.log). Off-screen the window stays "visible" to WebView2,
-            // so neither happens: the band renders outside the monitor and
-            // the renderer never suspends.
+            // so the band renders outside the monitor. Delivery into WebView2
+            // may still stall; the line is therefore revealed by viewport CSS
+            // rather than waiting for the completion event below.
             let _ = window.set_position(offscreen_park(&window));
             let _ = window.set_size(size);
             // Re-assert a fully transparent backdrop after the resize,
@@ -316,9 +319,15 @@ fn apply_bar_state_later(app: AppHandle, requested: bool) {
         let _ = window.set_always_on_top(true);
         state.applied.store(desired, Ordering::SeqCst);
         trace(&format!("apply {desired} done"));
-        // The web UI finishes its animation stages on this signal instead of
-        // its own timers (showing the line / revealing the capsule).
-        let _ = app.emit("bar-resized", desired);
+        // Split native UI dispatch from WebView2 delivery in the trace. Neither
+        // acknowledgement gates the line's visibility.
+        let queued_at = std::time::Instant::now();
+        let _ = app.run_on_main_thread(move || {
+            trace(&format!("main-thread after resize revision={revision} queue_ms={}", queued_at.elapsed().as_millis()));
+        });
+        trace(&format!("emit bar-resized {desired} start revision={revision}"));
+        let result = app.emit("bar-resized", desired);
+        trace(&format!("emit bar-resized {desired} queued revision={revision} ok={}", result.is_ok()));
     });
 }
 
@@ -327,6 +336,7 @@ fn set_bar_state(app: &AppHandle, window: &WebviewWindow, collapsed: bool) {
     let state = app.state::<BarState>();
     state.collapsed.store(collapsed, Ordering::SeqCst);
     state.applied.store(collapsed, Ordering::SeqCst);
+    state.revision.fetch_add(1, Ordering::SeqCst);
     // Resize while hidden: avoids the clipped/stale frames you get when a
     // transparent window is resized mid-animation.
     let _ = window.hide();
@@ -547,6 +557,7 @@ fn main() {
         .manage(BarState {
             collapsed: AtomicBool::new(false),
             applied: AtomicBool::new(false),
+            revision: AtomicU64::new(0),
             operation: Mutex::new(()),
         })
         .manage(shortcut_settings::SettingsState::default())

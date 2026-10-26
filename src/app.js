@@ -722,29 +722,28 @@
     if (invoke) invoke("trace_js", { msg: `${Date.now()} ${text} hidden=${document.hidden}` }).catch(() => {});
   }
 
-  function collapse() {
+  function collapse(requestResize = true) {
     if (collapsed) return;
     stopCardMotion();
     collapsed = true;
     trace("collapse start");
-    // hide the line right away: while the window is still tall it must not be
-    // stretched into a translucent rectangle
-    el.slim.style.display = "none";
-    el.stage.classList.remove("line-ready");
+    el.stage.classList.remove("expanding");
     el.stage.classList.add("collapsed");
-    // Rust waits out the CSS fade on a native thread, then resizes and emits
-    // `bar-resized`; no JS timer is on the critical path because Chromium may
-    // throttle them for seconds.
-    if (invoke) invoke("set_collapsed", { collapsed: true }).catch(err => console.warn("[workbar] collapse failed", err));
+    // CSS reveals the line when the viewport actually becomes 4px tall. A
+    // delayed completion event or animation frame must not leave it invisible.
+    if (requestResize && invoke) invoke("set_collapsed", { collapsed: true }).catch(err => console.warn("[workbar] collapse failed", err));
   }
 
-  function expand() {
+  function expand(requestResize = true) {
     if (!collapsed) return;
     collapsed = false;
     trace("expand start");
-    // two-stage expand: line fades out -> window grows -> capsule eases in
-    el.stage.classList.remove("line-ready");
-    if (invoke) invoke("set_collapsed", { collapsed: false }).catch(err => console.warn("[workbar] expand failed", err));
+    // Fade the line while the window is still thin. Native code already waits
+    // 180ms before expanding; it must not wait for a JS animation callback.
+    el.stage.classList.add("expanding");
+    // The small-viewport CSS keeps the capsule hidden until the window grows.
+    el.stage.classList.remove("collapsed");
+    if (requestResize && invoke) invoke("set_collapsed", { collapsed: false }).catch(err => console.warn("[workbar] expand failed", err));
   }
 
   // ------------------------------------------------------------------ load
@@ -892,15 +891,33 @@
   function wire() {
     el.previous.addEventListener("click", () => moveTaskWindow(-1));
     el.next.addEventListener("click", () => moveTaskWindow(1));
-    el.collapse.addEventListener("click", collapse);
-    el.slim.addEventListener("click", expand);
+    el.collapse.addEventListener("click", () => collapse());
+    el.slim.addEventListener("click", () => expand());
     document.addEventListener("contextmenu", (event) => event.preventDefault());
     window.addEventListener("resize", () => {
+      // Cleanup only: tall-viewport CSS hides the line even if this is late.
+      if (window.innerHeight > 8) el.stage.classList.remove("expanding");
       if (!collapsed) render(computeView(), true);
     });
     document.addEventListener("visibilitychange", () => {
+      trace(`visibility ${document.visibilityState}`);
       if (!document.hidden) tick();
     });
+    const slimViewport = window.matchMedia("(max-height: 8px)");
+    slimViewport.addEventListener("change", () => {
+      const size = `${window.innerWidth}x${window.innerHeight}`;
+      trace(`viewport slim=${slimViewport.matches} size=${size}`);
+      // Diagnostic only: neither visual state waits for this callback.
+      requestAnimationFrame(() => trace(`viewport frame size=${size}`));
+    });
+    if (typeof PerformanceObserver === "function"
+        && PerformanceObserver.supportedEntryTypes?.includes("longtask")) {
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (entry.duration >= 100) trace(`longtask start=${Math.round(performance.timeOrigin + entry.startTime)} duration=${Math.round(entry.duration)}ms`);
+        }
+      }).observe({ type: "longtask" });
+    }
 
     if (listen) {
       // native 1s tick: keeps the clock moving even when Chromium throttles JS timers
@@ -909,38 +926,25 @@
       listen("bar-shown", () => {
         if (collapsed) expand();
       });
-      // Native hotkey / tray toggle: run the same collapse()/expand() the
-      // collapse arrow uses, so the window is resized by set_collapsed only
-      // after the fade — a native resize first shows one stale expanded frame
-      // inside the 4px window, which reads as a black band flash.
+      // Hotkey / tray already schedules the native resize. Update the visuals
+      // without submitting a second operation and a second completion event.
       listen("bar-toggle", (event) => {
         if (!event || typeof event.payload !== "boolean") return;
         trace(`recv bar-toggle ${event.payload}`);
-        if (event.payload) collapse();
-        else expand();
+        if (event.payload) collapse(false);
+        else expand(false);
       });
-      // The native applier finished the window resize: complete the animation
-      // stages that must not run while the old window shape is still up.
+      // Completion events are diagnostic acknowledgements, not visual gates:
+      // WebView2 can deliver them late or after a newer toggle.
       listen("bar-resized", (event) => {
         if (!event || typeof event.payload !== "boolean") return;
         trace(`recv bar-resized ${event.payload}`);
-        if (event.payload) {
-          if (!collapsed) return;
-          el.slim.style.display = "";
-          requestAnimationFrame(() => el.stage.classList.add("line-ready"));
-        } else {
-          if (collapsed) return;
-          el.slim.style.display = "none";
-          el.stage.classList.remove("collapsed");
-        }
       });
       // Rust already expanded/resized the window (recovery from hidden)
       listen("mode-changed", (event) => {
         if (event && event.payload === false) {
           collapsed = false;
-          el.slim.style.display = "none";
-          el.stage.classList.remove("line-ready");
-          el.stage.classList.remove("collapsed");
+          el.stage.classList.remove("collapsed", "expanding");
         }
       });
     }

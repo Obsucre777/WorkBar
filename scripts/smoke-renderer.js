@@ -105,14 +105,26 @@ function bootstrap() {
   }
   const clone = (value) => JSON.parse(JSON.stringify(value));
   let blockSaves = false;
+  let blockResizes = false;
+  let blockResizeCompletions = false;
+  const resizeRequests = [];
   const pendingSaves = [];
   if (window.parent.__fixturePlan) plan = clone(window.parent.__fixturePlan);
   async function emit(name, payload) {
     for (const handler of listeners.get(name) || []) await handler({ payload });
   }
+  function nativeResize(collapsed, dispatchResize = true) {
+    window.frameElement.style.height = collapsed ? '4px' : '100px';
+    if (dispatchResize) window.dispatchEvent(new Event('resize'));
+    if (!blockResizeCompletions) queueMicrotask(() => emit('bar-resized', collapsed));
+  }
   window.__smoke = {
     getPlan: () => clone(plan),
     holdSaves: () => { blockSaves = true; },
+    holdResizes: () => { blockResizes = true; },
+    holdResizeCompletions: () => { blockResizeCompletions = true; },
+    resizeRequests: () => resizeRequests.slice(),
+    nativeResize,
     pendingSaves: () => pendingSaves.length,
     releaseSave() {
       const pending = pendingSaves.shift();
@@ -140,7 +152,8 @@ function bootstrap() {
         }
         if (command === 'trace_js') return;
         if (command === 'set_collapsed') {
-          queueMicrotask(() => emit('bar-resized', args.collapsed));
+          resizeRequests.push(args.collapsed);
+          if (!blockResizes) nativeResize(args.collapsed);
           return;
         }
         throw new Error(`Unexpected command: ${command}`);
@@ -160,9 +173,11 @@ function bootstrap() {
   window.matchMedia = (query) => query === '(prefers-reduced-motion: reduce)'
     ? { matches: !cardMotion }
     : nativeMatchMedia(query);
-  const style = document.createElement('style');
-  style.textContent = '*, *::before, *::after { transition: none !important; animation: none !important; }';
-  document.head.append(style);
+  if (!window.parent.__fixtureCssMotion) {
+    const style = document.createElement('style');
+    style.textContent = '*, *::before, *::after { transition: none !important; animation: none !important; }';
+    document.head.append(style);
+  }
 }
 
 async function runInBrowser() {
@@ -172,11 +187,12 @@ async function runInBrowser() {
     checks.push({ name: message, ok: Boolean(condition) });
     if (!condition) throw new Error(message);
   };
-  async function fixture(scene, restoredPlan = null, clock = null, cardMotion = false) {
+  async function fixture(scene, restoredPlan = null, clock = null, cardMotion = false, cssMotion = false) {
     if (frame) frame.remove();
     window.__fixturePlan = restoredPlan;
     window.__fixtureClock = clock;
     window.__fixtureCardMotion = cardMotion;
+    window.__fixtureCssMotion = cssMotion;
     frame = document.createElement('iframe');
     frame.style.cssText = 'width:1128px;height:100px;border:0';
     const loaded = new Promise((resolve, reject) => {
@@ -253,7 +269,92 @@ async function runInBrowser() {
       !task.running && !task.paused && !task.done && task.spent_sec === 0));
   }
   try {
-    let view = await fixture('independent-idle');
+    // Keep real CSS transitions enabled and sample their rendered intermediate
+    // opacity. Neither animation completion nor native acknowledgement is used
+    // to advance the window, including interrupted/reversed fades.
+    let view = await fixture('base', null, null, false, true);
+    view.win.__smoke.holdResizes();
+    view.win.__smoke.holdResizeCompletions();
+    view.doc.getElementById('collapse').click();
+    view.win.__smoke.nativeResize(true);
+    const line = view.doc.getElementById('slim');
+    const lineOpacity = () => Number(view.win.getComputedStyle(line).opacity);
+    const lineFade = () => {
+      lineOpacity(); // Flush style so a pending CSS transition exists.
+      return line.getAnimations().find((animation) => animation.transitionProperty === 'opacity' && animation.playState !== 'finished');
+    };
+    let fade = lineFade();
+    assert('real motion: collapsing starts a line fade-in', Boolean(fade));
+    fade.pause();
+    const fadeInDuration = Number(fade.effect.getTiming().duration);
+    fade.currentTime = fadeInDuration / 2;
+    assert('real motion: line fade-in has intermediate visible opacity', lineOpacity() > 0 && lineOpacity() < 1);
+    fade.finish();
+    assert('real motion: line becomes fully visible without acknowledgement', lineOpacity() === 1);
+    view.doc.getElementById('slim').click();
+    fade = lineFade();
+    assert('real motion: expanding fades the line before resizing', Boolean(fade));
+    fade.pause();
+    const fadeOutDuration = Number(fade.effect.getTiming().duration);
+    assert('real motion: line fade-out fits the native expansion grace', fadeOutDuration > 0 && fadeOutDuration <= 180);
+    fade.currentTime = fadeOutDuration / 2;
+    assert('real motion: line fade-out has intermediate visible opacity', lineOpacity() > 0 && lineOpacity() < 1);
+    // Grow before the fade completes, with JS resize handling also delayed.
+    view.win.__smoke.nativeResize(false, false);
+    const lineAfterExpand = view.win.getComputedStyle(view.doc.getElementById('slim'));
+    assert('real motion: no unfinished fade survives into the tall viewport', lineAfterExpand.opacity === '0' && lineAfterExpand.visibility === 'hidden');
+    assert('real motion: the hidden line cannot intercept expanded controls', lineAfterExpand.pointerEvents === 'none');
+    view.win.dispatchEvent(new view.win.Event('resize'));
+    assert('real motion: resize cleanup releases the expansion phase', !view.doc.getElementById('stage').classList.contains('expanding'));
+    view.doc.getElementById('collapse').click();
+    view.win.__smoke.nativeResize(true);
+    fade = lineFade();
+    assert('real motion: a second collapse starts a fresh fade-in', Boolean(fade));
+    fade.pause();
+    fade.currentTime = Number(fade.effect.getTiming().duration) / 2;
+    const interruptedOpacity = lineOpacity();
+    view.doc.getElementById('slim').click();
+    assert('real motion: reversing a fade never flashes back to full brightness', Math.abs(lineOpacity() - interruptedOpacity) < 0.02);
+    view.doc.getElementById('collapse').click();
+    fade = lineFade();
+    assert('real motion: cancelling expansion returns the line smoothly', Boolean(fade) && !view.doc.getElementById('stage').classList.contains('expanding'));
+    fade.finish();
+    assert('real motion: cancelled expansion leaves the line visible and clickable', lineOpacity() === 1 && view.win.getComputedStyle(line).pointerEvents === 'auto');
+
+    // Reproduce delayed/dropped completion messages without waiting in real
+    // time. Native geometry changes independently of both events and rAF.
+    view = await fixture('base');
+    view.win.__smoke.holdResizes();
+    view.win.__smoke.holdResizeCompletions();
+    view.win.requestAnimationFrame = () => 0;
+    const slimStyle = () => view.win.getComputedStyle(view.doc.getElementById('slim'));
+    const barStyle = () => view.win.getComputedStyle(view.doc.getElementById('bar'));
+    assert('expanded viewport hides the line', slimStyle().opacity === '0' && slimStyle().pointerEvents === 'none');
+    view.doc.getElementById('collapse').click();
+    assert('collapse cannot stretch the line inside the tall viewport', slimStyle().opacity === '0');
+    view.win.__smoke.nativeResize(true);
+    assert('line appears with no completion event or animation frame', slimStyle().opacity === '1' && slimStyle().display !== 'none');
+    assert('collapsed line remains clickable without acknowledgement', slimStyle().pointerEvents === 'auto');
+    assert('collapsed viewport hides the capsule', barStyle().visibility === 'hidden');
+    view.doc.getElementById('slim').click();
+    assert('expanding cannot flash a clipped capsule in the small viewport', barStyle().visibility === 'hidden');
+    view.win.__smoke.nativeResize(false);
+    assert('capsule returns without a completion event or animation frame', barStyle().visibility === 'visible' && barStyle().opacity === '1');
+    assert('expanded viewport cannot leave a stale line visible', slimStyle().opacity === '0' && slimStyle().pointerEvents === 'none');
+    await view.win.__smoke.emit('bar-resized', true);
+    assert('late collapse completion cannot undo a newer expansion', !view.doc.getElementById('stage').classList.contains('collapsed') && slimStyle().opacity === '0');
+    assert('each button action requests exactly one native resize', view.win.__smoke.resizeRequests().join(',') === 'true,false');
+    await view.win.__smoke.emit('bar-toggle', true);
+    view.win.__smoke.nativeResize(true);
+    await view.win.__smoke.emit('bar-toggle', false);
+    view.win.__smoke.nativeResize(false);
+    assert('native toggles never submit duplicate resize requests', view.win.__smoke.resizeRequests().join(',') === 'true,false');
+    assert('native expansion also finishes without acknowledgement', barStyle().opacity === '1' && slimStyle().opacity === '0');
+    // Even a delayed JS toggle handler cannot keep the native 4px strip blank.
+    view.win.__smoke.nativeResize(true);
+    assert('small viewport reveals the line before JS handles the toggle', slimStyle().opacity === '1' && slimStyle().pointerEvents === 'auto');
+
+    view = await fixture('independent-idle');
     for (const id of ['a', 'b', 'c']) idleState(view, id, `idle position ${id}`);
     view = await fixture('independent-legacy');
     for (const id of ['a', 'b', 'c']) idleState(view, id, `legacy selection position ${id}`);

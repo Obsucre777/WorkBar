@@ -266,6 +266,7 @@ v0.0.1 包含单实例保护：已经有一个 Workbar 在跑时，再次启动�
 **排查**
 - 启动记录：`%APPDATA%\Workbar\boot.log`
 - 崩溃记录（含 backtrace）：`%APPDATA%\Workbar\crash.log`
+- 展开 / 收起记录：`%APPDATA%\Workbar\trace.log`，包含窗口调整、通知排队、界面视口变化和超过 100ms 的界面长任务。
 
 ## 数据
 

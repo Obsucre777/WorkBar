@@ -519,20 +519,18 @@ body {
   top: 0;
   left: 0;
   width: 100%;
-  height: 100%;
+  height: 4px;
   padding: 0;
   border: 0;
   background: transparent;
   cursor: pointer;
   z-index: 4;
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.2s ease;
-}
-
-.stage.collapsed.line-ready .slim {
-  opacity: 1;
-  pointer-events: auto;
+  /* Fades belong only to the 4px viewport. Once the window grows, hide the
+     line immediately so no unfinished transition can overlay the capsule. */
+  transition: none;
 }
 
 /* progress is the line itself: it retracts from both ends toward the center */
@@ -641,10 +639,30 @@ body {
   --task-line: linear-gradient(90deg, #34d399, #6ee7b7);
 }
 
-/* never let the line show up inside the expanded (tall) window */
-.stage:not(.collapsed) .slim {
-  opacity: 0 !important;
-  pointer-events: none;
+/* Geometry is the completion signal. Media queries follow the native viewport
+   resize without waiting for a JS event, timer or requestAnimationFrame. The
+   threshold allows fractional CSS pixels at different Windows display scales;
+   LINE_HEIGHT in main.rs is 4 logical pixels, the expanded window is 73. */
+@media (max-height: 8px) {
+  .slim {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 0.22s ease-out;
+  }
+
+  .stage.expanding .slim {
+    opacity: 0;
+    pointer-events: none;
+    /* Finish inside the native 180ms expansion grace period. */
+    transition: opacity 0.14s ease-in;
+  }
+
+  .bar {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+  }
 }
 
 .slim:hover .slim-bar {
