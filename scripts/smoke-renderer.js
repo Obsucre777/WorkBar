@@ -108,15 +108,37 @@ function bootstrap() {
   let blockResizes = false;
   let blockResizeCompletions = false;
   const resizeRequests = [];
+  const contentRequests = [];
+  const nativeWidthLimit = window.parent.__fixtureNativeWidthLimit;
+  let contentWidth = null;
+  let appliedContentWidth = null;
+  let canvasResizes = 0;
+  let contentFitHeld = false;
+  let nativeCollapsed = false;
   const pendingSaves = [];
   if (window.parent.__fixturePlan) plan = clone(window.parent.__fixturePlan);
   async function emit(name, payload) {
     for (const handler of listeners.get(name) || []) await handler({ payload });
   }
   function nativeResize(collapsed, dispatchResize = true) {
+    nativeCollapsed = collapsed;
+    if (Number.isFinite(nativeWidthLimit)) {
+      window.frameElement.style.width = `${collapsed ? 1536 : nativeWidthLimit}px`;
+      appliedContentWidth = collapsed ? 1536 : contentWidth;
+      canvasResizes += 1;
+    }
     window.frameElement.style.height = collapsed ? '4px' : '100px';
     if (dispatchResize) window.dispatchEvent(new Event('resize'));
     if (!blockResizeCompletions) queueMicrotask(() => emit('bar-resized', collapsed));
+  }
+  function applyContentWidth() {
+    if (nativeCollapsed || contentWidth === null) return;
+    appliedContentWidth = contentWidth;
+    if (window.innerWidth !== nativeWidthLimit) {
+      window.frameElement.style.width = `${nativeWidthLimit}px`;
+      canvasResizes += 1;
+      window.dispatchEvent(new Event('resize'));
+    }
   }
   window.__smoke = {
     getPlan: () => clone(plan),
@@ -125,6 +147,12 @@ function bootstrap() {
     holdResizeCompletions: () => { blockResizeCompletions = true; },
     resizeRequests: () => resizeRequests.slice(),
     nativeResize,
+    contentRequests: () => contentRequests.slice(),
+    contentWidth: () => contentWidth,
+    appliedContentWidth: () => appliedContentWidth,
+    canvasResizes: () => canvasResizes,
+    holdContentWidth: () => { contentFitHeld = true; },
+    applyContentWidth,
     pendingSaves: () => pendingSaves.length,
     releaseSave() {
       const pending = pendingSaves.shift();
@@ -151,6 +179,15 @@ function bootstrap() {
           return;
         }
         if (command === 'trace_js') return;
+        if (command === 'sync_task_count') {
+          contentRequests.push(args.count);
+          if (!Number.isFinite(nativeWidthLimit)) return {};
+          const compact = Math.max(1, Math.min(4, args.count)) * 240 + 70;
+          contentWidth = args.count <= 4 && compact <= nativeWidthLimit ? compact
+            : Math.max(1, Math.min(4, Math.floor((nativeWidthLimit - 134) / 240))) * 240 + 134;
+          if (!contentFitHeld) queueMicrotask(applyContentWidth);
+          return { maxWidth: nativeWidthLimit };
+        }
         if (command === 'set_collapsed') {
           resizeRequests.push(args.collapsed);
           if (!blockResizes) nativeResize(args.collapsed);
@@ -187,12 +224,13 @@ async function runInBrowser() {
     checks.push({ name: message, ok: Boolean(condition) });
     if (!condition) throw new Error(message);
   };
-  async function fixture(scene, restoredPlan = null, clock = null, cardMotion = false, cssMotion = false) {
+  async function fixture(scene, restoredPlan = null, clock = null, cardMotion = false, cssMotion = false, nativeWidthLimit = null) {
     if (frame) frame.remove();
     window.__fixturePlan = restoredPlan;
     window.__fixtureClock = clock;
     window.__fixtureCardMotion = cardMotion;
     window.__fixtureCssMotion = cssMotion;
+    window.__fixtureNativeWidthLimit = nativeWidthLimit;
     frame = document.createElement('iframe');
     frame.style.cssText = 'width:1128px;height:100px;border:0';
     const loaded = new Promise((resolve, reject) => {
@@ -669,8 +707,57 @@ async function runInBrowser() {
     for (const count of [1, 2, 3, 4]) {
       view = await fixture('paging', { ...pagingPlan, tasks: pagingPlan.tasks.slice(0, count) });
       assert(`${count} tasks fit without navigation`, visibleTasks().length === count && previousTasks().hidden && nextTasks().hidden);
+      const pill = view.doc.getElementById('bar').getBoundingClientRect();
+      assert(`${count} tasks only occupy their own card slots and controls`, Math.abs(pill.width - (count * 240 + 62)) < 0.1);
+      assert(`${count} task capsule stays centered`, Math.abs((pill.left + pill.right) / 2 - view.win.innerWidth / 2) < 0.1);
       fixedCards(`${count} visible tasks`);
     }
+    for (const count of [0, 1, 2, 3, 4, 5]) {
+      view = await fixture('paging', { ...pagingPlan, tasks: pagingPlan.tasks.slice(0, count) }, null, false, false, 1094);
+      await settled();
+      const expectedWidth = count > 4 ? 1094 : Math.max(1, count) * 240 + 70;
+      assert(`native fit ${count}: region trims transparent outer space without resizing the canvas`, view.win.__smoke.appliedContentWidth() === expectedWidth && view.win.innerWidth === 1094 && Math.abs(view.doc.getElementById('bar').getBoundingClientRect().width - (expectedWidth - 8)) < 0.1);
+      assert(`native fit ${count}: arrows only appear for overflowing tasks`, previousTasks().hidden === (count <= 4) && nextTasks().hidden === (count <= 4));
+    }
+    view = await fixture('paging', { ...pagingPlan, tasks: pagingPlan.tasks.slice(0, 1) }, null, false, false, 1094);
+    await settled();
+    const grownPlan = view.win.__smoke.getPlan();
+    grownPlan.tasks = pagingPlan.tasks.slice(0, 5);
+    await view.win.__smoke.setPlan(grownPlan);
+    await settled();
+    assert('a one-card native region can grow back to four cards and arrows', view.win.innerWidth === 1094 && visibleTasks().join('') === 'abcd' && !nextTasks().hidden);
+    const fitRequestsBeforeBrowse = view.win.__smoke.contentRequests().length;
+    nextTasks().click();
+    await settled();
+    await view.win.__smoke.setClock(12, 0, 1);
+    assert('browsing and clock ticks do not repeatedly resize the native window', view.win.__smoke.contentRequests().length === fitRequestsBeforeBrowse);
+    view.unit('e').querySelector('.done').click();
+    await settled();
+    assert('five-to-four tasks releases the unused arrow width', view.win.__smoke.appliedContentWidth() === 1030 && previousTasks().hidden && visibleTasks().join('') === 'abcd');
+    for (const id of ['b', 'c', 'd']) {
+      view.unit(id).querySelector('.done').click();
+      await settled();
+    }
+    assert('completion down to one task returns to a compact native region', view.win.__smoke.appliedContentWidth() === 310 && visibleTasks().join('') === 'a');
+    view.doc.getElementById('collapse').click();
+    await settled();
+    const changedWhileCollapsed = view.win.__smoke.getPlan();
+    changedWhileCollapsed.tasks.push(...pagingPlan.tasks.slice(5, 8));
+    await view.win.__smoke.setPlan(changedWhileCollapsed);
+    await settled();
+    assert('content changes keep the collapsed line full-width', view.win.innerHeight === 4 && view.win.innerWidth === 1536 && view.win.__smoke.contentWidth() === 1030);
+    view.doc.getElementById('slim').click();
+    await settled();
+    assert('expanding uses the latest task count from the collapsed state', view.win.__smoke.appliedContentWidth() === 1030 && visibleTasks().join('') === 'afgh' && previousTasks().hidden);
+    view = await fixture('paging', { ...pagingPlan, tasks: pagingPlan.tasks.slice(0, 3) }, null, false, false, 790);
+    await settled();
+    assert('narrow screen fits three cards without arrows when all tasks fit', visibleTasks().join('') === 'abc' && view.win.innerWidth === 790 && previousTasks().hidden);
+    const narrowOverflow = view.win.__smoke.getPlan();
+    narrowOverflow.tasks.push(pagingPlan.tasks[3]);
+    await view.win.__smoke.setPlan(narrowOverflow);
+    await settled();
+    assert('narrow screen reserves navigation only after tasks overflow', visibleTasks().join('') === 'ab' && view.win.__smoke.appliedContentWidth() === 614 && !nextTasks().hidden);
+
     view = await fixture('paging');
     assert('overflow starts with exactly four tasks', visibleTasks().join('') === 'abcd');
     assert('overflow shows both arrows with a disabled left boundary', !previousTasks().hidden && !nextTasks().hidden && previousTasks().disabled && !nextTasks().disabled);
@@ -820,6 +907,61 @@ async function runInBrowser() {
       await Promise.all(animations.map((animation) => animation.finished));
       await settled();
     }
+    // Native trimming waits for the visual contraction; new additions can
+    // reverse that contraction without clipping cards or moving their origin.
+    view = await fixture('paging', { ...pagingPlan, tasks: pagingPlan.tasks.slice(0, 5) }, null, true, false, 1094);
+    await settled();
+    view.win.__smoke.holdContentWidth();
+    const widePill = view.doc.getElementById('bar');
+    const widePillRect = widePill.getBoundingClientRect();
+    const compactB = view.unit('b');
+    const compactBRect = compactB.getBoundingClientRect();
+    view.unit('a').querySelector('.done').click();
+    let compactAnimations = pauseCardAnimations();
+    assert('capsule contraction starts at the current width and card positions', Math.abs(widePill.getBoundingClientRect().width - widePillRect.width) < 0.1 && Math.abs(compactB.getBoundingClientRect().left - compactBRect.left) < 0.1);
+    for (const animation of compactAnimations) animation.currentTime = Number(animation.effect.getTiming().delay) + Number(animation.effect.getTiming().duration) / 2;
+    const contractingWidth = widePill.getBoundingClientRect().width;
+    assert('unused arrow space contracts smoothly instead of snapping', contractingWidth > 1022 && contractingWidth < 1086);
+    const returnedOverflow = view.win.__smoke.getPlan();
+    returnedOverflow.tasks.push(pagingPlan.tasks[5]);
+    await view.win.__smoke.setPlan(returnedOverflow);
+    pauseCardAnimations();
+    assert('adding during contraction continues from the current capsule width', Math.abs(widePill.getBoundingClientRect().width - contractingWidth) < 0.1 && view.win.__smoke.contentWidth() === 1094);
+    await finishCardAnimations();
+    view.win.__smoke.applyContentWidth();
+    assert('a cancelled contraction keeps the full browsing width', Math.abs(widePill.getBoundingClientRect().width - 1086) < 0.1 && view.win.innerWidth === 1094);
+    const removeOverflow = view.win.__smoke.getPlan();
+    removeOverflow.tasks.find((task) => task.id === 'f').done = true;
+    await view.win.__smoke.setPlan(removeOverflow);
+    pauseCardAnimations();
+    assert('finishing an offscreen fifth task also animates the capsule width', widePill.getAnimations().length > 0 && previousTasks().hidden);
+    await finishCardAnimations();
+    view.win.__smoke.applyContentWidth();
+    const compactC = view.unit('c');
+    const compactCRect = compactC.getBoundingClientRect();
+    view.unit('b').querySelector('.done').click();
+    compactAnimations = pauseCardAnimations();
+    assert('shrinking card count keeps surviving cards at their painted positions', view.unit('c') === compactC && Math.abs(compactC.getBoundingClientRect().left - compactCRect.left) < 0.1);
+    for (const animation of compactAnimations) animation.currentTime = Number(animation.effect.getTiming().delay) + Number(animation.effect.getTiming().duration) / 2;
+    assert('card-count contraction keeps the capsule centered', Math.abs((widePill.getBoundingClientRect().left + widePill.getBoundingClientRect().right) / 2 - view.win.innerWidth / 2) < 0.1);
+    await finishCardAnimations();
+    view.win.__smoke.applyContentWidth();
+    assert('native trimming leaves only the final compact card area', view.win.__smoke.appliedContentWidth() === 790 && view.win.innerWidth === 1094 && Math.abs(widePill.getBoundingClientRect().width - 782) < 0.1 && visibleTasks().join('') === 'cde');
+    fixedCards('after compact native trimming');
+    // Exact reported case: three visible tasks -> finish one -> two tasks.
+    const twoCardSurvivor = view.unit('d');
+    const twoCardBefore = twoCardSurvivor.getBoundingClientRect();
+    view.unit('c').querySelector('.done').click();
+    pauseCardAnimations();
+    assert('three-to-two contraction preserves the starting card position', Math.abs(twoCardSurvivor.getBoundingClientRect().left - twoCardBefore.left) < 0.1);
+    await finishCardAnimations();
+    const beforeNativeTrim = widePill.getBoundingClientRect();
+    const canvasResizesBeforeTrim = view.win.__smoke.canvasResizes();
+    view.win.__smoke.applyContentWidth();
+    assert('three-to-two native trim excludes the unused input area', view.win.__smoke.appliedContentWidth() === 550 && visibleTasks().join('') === 'de' && Math.abs(beforeNativeTrim.width - 542) < 0.1);
+    assert('post-animation native trimming never resizes the WebView canvas', view.win.__smoke.canvasResizes() === canvasResizesBeforeTrim);
+    assert('post-animation trimming leaves the painted capsule completely unchanged', Math.abs(widePill.getBoundingClientRect().left - beforeNativeTrim.left) < 0.1 && Math.abs(widePill.getBoundingClientRect().width - beforeNativeTrim.width) < 0.1);
+
     view = await fixture('paging', null, null, true);
     const browsePlan = JSON.stringify(view.win.__smoke.getPlan());
     const browseSegments = [...view.doc.querySelectorAll('.slim-seg')];

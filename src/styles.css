@@ -54,7 +54,9 @@ body {
 .bar {
   position: relative;
   z-index: 2;
-  width: 100%;
+  width: max-content;
+  max-width: 100%;
+  flex: 0 0 auto;
   height: var(--bar-h);
   padding: 0 10px 0 10px;
   display: flex;
@@ -449,10 +451,6 @@ body {
   transform: scale(0.94);
 }
 
-.spacer {
-  flex: 1 1 auto;
-}
-
 /* ---------------------------------------------------------------- tail */
 
 .tail {
@@ -460,6 +458,7 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
+  margin-left: auto;
   padding-right: 2px;
 }
 

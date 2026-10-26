@@ -46,6 +46,11 @@
   let visibleIds = [];
   let windowCapacity = MAX_VISIBLE_TASKS;
   let viewportMotion = null;
+  let barWidthMotion = null;
+  let nativeWidthLimit = null;
+  let reportedTaskCount = null;
+  let layoutRequest = null;
+  let layoutGeneration = 0;
   const leavingUnits = new Map();
 
   // ------------------------------------------------------------------ time
@@ -245,6 +250,8 @@
     }
     viewportMotion?.cancel();
     viewportMotion = null;
+    barWidthMotion?.cancel();
+    barWidthMotion = null;
     for (const [node, entry] of leavingUnits) {
       entry.animation.cancel();
       node.remove();
@@ -290,11 +297,12 @@
     animation.finished.then(release, release);
   }
 
-  function ensureUnits(tasks, immediate, previousWidth, navigation = 0) {
+  function ensureUnits(tasks, immediate, snapshot, navigation = 0) {
     const ids = tasks.length ? tasks.map((task) => task.id) : [null];
     const animate = !immediate && !collapsed && !reducedMotion()
       && typeof el.units.animate === "function" && unitNodes.length > 0;
-    if (ids.length === unitNodes.length && ids.every((id, index) => unitNodes[index].taskId === id)) {
+    if (ids.length === unitNodes.length && ids.every((id, index) => unitNodes[index].taskId === id)
+        && snapshot.targetWidth === el.viewport.style.width && snapshot.browseHidden === el.previous.hidden) {
       if (!animate) stopCardMotion();
       return unitNodes;
     }
@@ -302,10 +310,7 @@
     // Include still-visible outgoing cards: an immediate direction reversal
     // reuses the same nodes and their painted positions, without duplicate
     // ghosts or a jump back to the beginning of the previous animation.
-    const candidates = [...unitNodes, ...Array.from(leavingUnits.values(), (entry) => entry.refs)];
-    const clip = el.viewport.getBoundingClientRect();
-    const before = new Map(candidates.map((refs) => [refs.taskId, refs.root.getBoundingClientRect()]));
-    const opacity = new Map(candidates.map((refs) => [refs.taskId, Number(getComputedStyle(refs.root).opacity)]));
+    const { candidates, clip, before, opacity } = snapshot;
     const previous = new Map(candidates.map((refs) => [refs.taskId, refs]));
     if (!animate) stopCardMotion();
     else {
@@ -315,6 +320,8 @@
       }
       viewportMotion?.cancel();
       viewportMotion = null;
+      barWidthMotion?.cancel();
+      barWidthMotion = null;
       for (const [node, entry] of leavingUnits) {
         leavingUnits.delete(node);
         entry.animation.cancel();
@@ -344,7 +351,7 @@
     const origin = el.viewport.getBoundingClientRect();
     const after = new Map(next.map((refs) => [refs.taskId, refs.root.getBoundingClientRect()]));
     const shifts = next.filter((refs) => before.has(refs.taskId))
-      .map((refs) => before.get(refs.taskId).left - after.get(refs.taskId).left);
+      .map((refs) => (before.get(refs.taskId).left - clip.left) - (after.get(refs.taskId).left - origin.left));
     const entryOffset = shifts.find((shift) => Math.abs(shift) > 0.5)
       || (navigation || 1) * parseFloat(getComputedStyle(el.units).getPropertyValue("--card-width"));
     const timing = navigation ? BROWSE_MOTION : CARD_MOTION;
@@ -358,15 +365,17 @@
         const travel = !navigation ? null : entryOffset > 0
           ? Math.min(-entryOffset, clip.left - rect.right)
           : Math.max(-entryOffset, clip.right - rect.left);
-        exitUnit(refs, rect, origin, opacity.get(refs.taskId), travel);
+        exitUnit(refs, rect, clip, opacity.get(refs.taskId), travel);
       }
     }
     for (const refs of next) {
       const old = before.get(refs.taskId);
       const target = after.get(refs.taskId);
       if (old) {
-        const dx = old.left - target.left;
-        const dy = old.top - target.top;
+        // The compact capsule itself moves as its width changes. Animate card
+        // positions relative to that viewport, so centering cannot cause jumps.
+        const dx = (old.left - clip.left) - (target.left - origin.left);
+        const dy = (old.top - clip.top) - (target.top - origin.top);
         const alpha = opacity.get(refs.taskId);
         if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5 || alpha < 0.999) {
           animateCard(refs, [
@@ -382,14 +391,22 @@
       }
     }
     const width = parseFloat(el.viewport.style.width);
-    if (Math.abs(previousWidth - width) > 0.5) {
-      const animation = el.viewport.animate([{ width: `${previousWidth}px` }, { width: `${width}px` }], {
-        duration: 320, delay: 35, easing: "cubic-bezier(.16,1,.3,1)", fill: "backwards",
-      });
+    if (Math.abs(clip.width - width) > 0.5) {
+      const animation = el.viewport.animate([{ width: `${clip.width}px` }, { width: `${width}px` }], CARD_MOTION);
       viewportMotion = animation;
       const release = () => {
         if (viewportMotion === animation) viewportMotion = null;
       };
+      animation.finished.then(release, release);
+    }
+    const barStyle = getComputedStyle(el.bar);
+    const barWidth = width + el.tail.getBoundingClientRect().width
+      + parseFloat(barStyle.paddingLeft) + parseFloat(barStyle.paddingRight)
+      + (parseFloat(barStyle.columnGap) || 0);
+    if (Math.abs(snapshot.barWidth - barWidth) > 0.5) {
+      const animation = el.bar.animate([{ width: `${snapshot.barWidth}px` }, { width: `${barWidth}px` }], CARD_MOTION);
+      barWidthMotion = animation;
+      const release = () => { if (barWidthMotion === animation) barWidthMotion = null; };
       animation.finished.then(release, release);
     }
     return next;
@@ -400,17 +417,38 @@
     return (plan.tasks || []).filter((task) => !task.done);
   }
 
+  function syncWindowTaskCount(count, force = false) {
+    if (!invoke) return Promise.resolve();
+    if (!force && reportedTaskCount === count) return layoutRequest || Promise.resolve();
+    reportedTaskCount = count;
+    const generation = ++layoutGeneration;
+    layoutRequest = invoke("sync_task_count", { count }).then((layout) => {
+      if (generation !== layoutGeneration || !Number.isFinite(layout?.maxWidth)) return;
+      const changed = nativeWidthLimit !== null && Math.abs(nativeWidthLimit - layout.maxWidth) > 0.5;
+      nativeWidthLimit = layout.maxWidth;
+      if (changed && !collapsed) render(computeView(), true);
+    }).catch((err) => {
+      if (generation === layoutGeneration) reportedTaskCount = null;
+      console.warn("[workbar] window width sync failed", err);
+    });
+    return layoutRequest;
+  }
+
   /** Keep card dimensions fixed; smaller screens show fewer whole cards. */
   function cardLayout(total) {
     const cardWidth = parseFloat(getComputedStyle(el.units).getPropertyValue("--card-width"));
     if (collapsed) return { cardWidth, capacity: windowCapacity };
     const barStyle = getComputedStyle(el.bar);
     const tailStyle = getComputedStyle(el.tail);
+    const stageStyle = getComputedStyle(el.stage);
     const gap = parseFloat(barStyle.columnGap) || 0;
-    const available = el.bar.clientWidth
+    // Use the monitor limit reported by native code, not the already compact
+    // capsule. Otherwise adding tasks to a one-card window could never grow it.
+    const available = (nativeWidthLimit ?? window.innerWidth)
+      - parseFloat(stageStyle.paddingLeft) - parseFloat(stageStyle.paddingRight)
       - parseFloat(barStyle.paddingLeft) - parseFloat(barStyle.paddingRight)
       - el.collapse.offsetWidth - parseFloat(tailStyle.paddingLeft)
-      - parseFloat(tailStyle.paddingRight) - gap * 2;
+      - parseFloat(tailStyle.paddingRight) - gap;
     let capacity = Math.max(1, Math.min(MAX_VISIBLE_TASKS, Math.floor(available / cardWidth)));
     if (total > capacity) {
       const navigationWidth = parseFloat(getComputedStyle(el.previous).width) * 2
@@ -529,9 +567,19 @@
   }
 
   function renderUnits(view, pending, immediate, navigation) {
-    const previousWidth = el.viewport.getBoundingClientRect().width;
+    // Measure before computeUnits changes width or navigation controls.
+    const candidates = [...unitNodes, ...Array.from(leavingUnits.values(), (entry) => entry.refs)];
+    const snapshot = {
+      candidates,
+      clip: el.viewport.getBoundingClientRect(),
+      before: new Map(candidates.map((refs) => [refs.taskId, refs.root.getBoundingClientRect()])),
+      opacity: new Map(candidates.map((refs) => [refs.taskId, Number(getComputedStyle(refs.root).opacity)])),
+      barWidth: el.bar.getBoundingClientRect().width,
+      targetWidth: el.viewport.style.width,
+      browseHidden: el.previous.hidden,
+    };
     const list = computeUnits(pending);
-    const nodes = ensureUnits(list, immediate, previousWidth, navigation);
+    const nodes = ensureUnits(list, immediate, snapshot, navigation);
     nodes.forEach((refs, index) => {
       const task = list[index] || null;
       refs.taskId = task ? task.id : null;
@@ -573,6 +621,7 @@
     bar.classList.toggle("complete", view.state === "complete");
 
     const pending = pendingTasks();
+    syncWindowTaskCount(pending.length);
     renderUnits(view, pending, immediate, navigation);
     renderSlim(view, pending);
 
@@ -820,6 +869,7 @@
       plan = normalizePlan(demoPlan());
     }
     rollPlanDate();
+    await syncWindowTaskCount((plan.tasks || []).filter((task) => !task.done).length);
     lastSnapshot = serialize();
     render(computeView(), immediate !== false);
   }
@@ -921,7 +971,9 @@
     window.addEventListener("resize", () => {
       // Cleanup only: tall-viewport CSS hides the line even if this is late.
       if (window.innerHeight > 8) el.stage.classList.remove("expanding");
-      if (!collapsed) render(computeView(), true);
+      const count = (plan.tasks || []).filter((task) => !task.done).length;
+      syncWindowTaskCount(count, true);
+      if (!collapsed) render(computeView(), cardLayout(count).capacity !== windowCapacity);
     });
     document.addEventListener("visibilitychange", () => {
       trace(`visibility ${document.visibilityState}`);
