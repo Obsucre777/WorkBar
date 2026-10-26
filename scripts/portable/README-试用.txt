@@ -4,7 +4,7 @@ Workbar 0.0.1 · 试用包
 【方式一：绿色版（推荐先试）】
 在资源管理器里打开本文件夹，双击：
     try-workbar.cmd
-它会重置一份"以当前时间为中心"的示例计划，再启动 Workbar。
+它会通过 MCP 创建一份示例计划并保存到 SQLite，再启动 Workbar。
 
 【方式二：装到系统里（不碰临时目录，装完自动启动）】
 双击：
@@ -74,7 +74,8 @@ workbar-mcp.exe 是标准 MCP stdio server。安装器已经把安装目录写�
   "今天还剩什么没做完？"
 
 【数据 / 排查 / 卸载】
-计划数据：%APPDATA%\Workbar\plan.json（删掉即清空）
+任务数据：%APPDATA%\Workbar\workbar.db（SQLite，旧 plan.json 不再读取）
+清空任务：通过 AI 调用 workbar_clear_day；不要在程序运行时删除数据库文件。
 启动日志：%APPDATA%\Workbar\boot.log
 崩溃日志：%APPDATA%\Workbar\crash.log（有异常时把这个发我）
 绿色版：删掉本文件夹即卸载；安装版用 uninstall.cmd。

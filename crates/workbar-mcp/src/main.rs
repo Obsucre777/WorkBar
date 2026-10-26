@@ -5,7 +5,7 @@
 //! Workbar floating bar is displaying.
 //!
 //! No async runtime, no SDK, no Node.js: just JSON-RPC 2.0 over stdio.
-//! All state lives in `%APPDATA%\Workbar\plan.json`, shared with the app.
+//! Tasks live in `%APPDATA%\Workbar\workbar.db`, shared with the app.
 
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
@@ -252,7 +252,6 @@ fn tool_definitions() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "intro": { "type": "string", "description": "One short line describing what today is really about." },
                     "tasks": { "type": "array", "items": task_schema(), "minItems": 1 }
                 },
                 "required": ["tasks"],
@@ -401,7 +400,20 @@ fn error_result(text: String) -> Value {
 }
 
 fn render(plan: &Plan, message: &str) -> Value {
-    text_result(workbar_core::tool_result_text(plan, message))
+    text_result(json!({ "message": message, "date": plan.date,
+        "tasks": plan.tasks.iter().map(compact_task).collect::<Vec<_>>() }).to_string())
+}
+
+fn compact_task(task: &Task) -> Value {
+    json!({ "id": task.id, "title": task.title, "timer": workbar_core::timer_mode(task),
+        "running": task.running, "paused": task.paused, "done": task.done, "spent_sec": task.spent_sec })
+}
+
+fn task_result(plan: &Plan, id: &str) -> Value {
+    match plan.tasks.iter().find(|task| task.id == id) {
+        Some(task) => text_result(compact_task(task).to_string()),
+        None => error_result(format!("找不到任务 {id}")),
+    }
 }
 
 fn tool_get_today(_args: &Value) -> Value {
@@ -442,18 +454,9 @@ fn tool_plan_day(args: &Value) -> Value {
         Ok(tasks) => tasks,
         Err(err) => return error_result(err),
     };
-    let intro = args
-        .get("intro")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-
     match workbar_core::update(|plan| {
         plan.date = workbar_core::today();
-        plan.intro = intro.clone();
         plan.tasks = tasks.clone();
-        plan.current_id = None;
         Ok(())
     }) {
         Ok(plan) => render(&plan, "已安排今天的计划。"),
@@ -470,15 +473,18 @@ fn tool_add_tasks(args: &Value) -> Value {
         Ok(value) => value,
         Err(err) => return error_result(err),
     };
+    let added_ids: Vec<_> = tasks.iter().map(|task| task.id.clone()).collect();
     match workbar_core::update(|plan| {
         if plan.date.trim().is_empty() || plan.date != workbar_core::today() {
             plan.date = workbar_core::today();
-            plan.current_id = None;
         }
         insert_tasks(plan, tasks, placement)?;
         Ok(())
     }) {
-        Ok(plan) => render(&plan, "已添加到今天的计划。"),
+        Ok(mut plan) => {
+            plan.tasks.retain(|task| added_ids.contains(&task.id));
+            render(&plan, "已添加任务。")
+        }
         Err(err) => error_result(err),
     }
 }
@@ -554,7 +560,7 @@ fn tool_reorder_tasks(args: &Value) -> Value {
         }
         Ok(())
     }) {
-        Ok(plan) => render(&plan, "已按要求调整任务顺序。"),
+        Ok(plan) => text_result(json!({ "task_ids": plan.tasks.iter().map(|task| &task.id).collect::<Vec<_>>() }).to_string()),
         Err(err) => error_result(err),
     }
 }
@@ -635,7 +641,7 @@ fn tool_update_task(args: &Value) -> Value {
         Ok(())
     });
     match result {
-        Ok(plan) => render(&plan, "已更新任务。"),
+        Ok(plan) => task_result(&plan, &id),
         Err(err) => error_result(err),
     }
 }
@@ -653,7 +659,7 @@ fn tool_set_current(args: &Value) -> Value {
         task.paused = false;
         Ok(())
     }) {
-        Ok(plan) => render(&plan, "已启动指定任务，其他任务保持不变。"),
+        Ok(plan) => task_result(&plan, &id),
         Err(err) => error_result(err),
     }
 }
@@ -674,7 +680,7 @@ fn tool_complete_task(args: &Value) -> Value {
         task.paused = false;
         Ok(())
     }) {
-        Ok(plan) => render(&plan, "已完成一项。"),
+        Ok(plan) => task_result(&plan, &id),
         Err(err) => error_result(err),
     }
 }
@@ -692,20 +698,20 @@ fn tool_remove_task(args: &Value) -> Value {
         }
         Ok(())
     }) {
-        Ok(plan) => render(&plan, "已删除任务。"),
+        Ok(_) => text_result(json!({ "id": id, "removed": true }).to_string()),
         Err(err) => error_result(err),
     }
 }
 
 fn tool_clear_day() -> Value {
+    let mut removed = 0;
     match workbar_core::update(|plan| {
+        removed = plan.tasks.len();
         plan.tasks.clear();
-        plan.current_id = None;
-        plan.intro = None;
         plan.date = workbar_core::today();
         Ok(())
     }) {
-        Ok(plan) => render(&plan, "已清空今天的计划。"),
+        Ok(_) => text_result(json!({ "cleared": true, "removed_count": removed }).to_string()),
         Err(err) => error_result(err),
     }
 }
@@ -728,22 +734,22 @@ fn tool_start_work(args: &Value) -> Value {
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     let source = client_name();
-
-    let result = workbar_core::update(|plan| {
-        let mut task = Task {
+    let mut task = Task {
             title,
             note,
             timer: Some(TimerMode::Up),
             running: true,
             source: Some(source.clone()),
             ..Task::default()
-        };
-        normalize_task(&mut task)?;
-        plan.tasks.push(task.clone());
+    };
+    if let Err(error) = normalize_task(&mut task) { return error_result(error); }
+    let id = task.id.clone();
+    let result = workbar_core::update(|plan| {
+        plan.tasks.push(task);
         Ok(())
     });
     match result {
-        Ok(plan) => render(&plan, "已开始工作（正计时已启动）。"),
+        Ok(plan) => task_result(&plan, &id),
         Err(err) => error_result(err),
     }
 }
@@ -757,7 +763,7 @@ fn tool_finish_work(args: &Value) -> Value {
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     let source = client_name();
-
+    let mut finished_id = String::new();
     let result = workbar_core::update(|plan| {
         let index = if let Some(id) = explicit.clone() {
             plan.tasks
@@ -775,13 +781,14 @@ fn tool_finish_work(args: &Value) -> Value {
             }
         };
         let task = &mut plan.tasks[index];
+        finished_id = task.id.clone();
         task.done = true;
         task.running = false;
         task.paused = false;
         Ok(())
     });
     match result {
-        Ok(plan) => render(&plan, "工作已完成。"),
+        Ok(plan) => task_result(&plan, &finished_id),
         Err(err) => error_result(err),
     }
 }
@@ -831,7 +838,9 @@ mod tests {
             fn drop(&mut self) {
                 if let Some(value) = &self.previous { std::env::set_var("WORKBAR_DATA_DIR", value); }
                 else { std::env::remove_var("WORKBAR_DATA_DIR"); }
-                let _ = std::fs::remove_file(self.directory.join("plan.json"));
+                let _ = std::fs::remove_file(self.directory.join("workbar.db"));
+                let _ = std::fs::remove_file(self.directory.join("workbar.db-wal"));
+                let _ = std::fs::remove_file(self.directory.join("workbar.db-shm"));
                 let _ = std::fs::remove_dir(&self.directory);
             }
         }
@@ -845,7 +854,6 @@ mod tests {
         ] })));
         ok(tool_set_current(&json!({ "id": "c" })));
         let plan = workbar_core::load().unwrap();
-        assert!(plan.current_id.is_none());
         assert!(plan.tasks.iter().find(|task| task.id == "a").unwrap().running);
         assert!(plan.tasks.iter().find(|task| task.id == "b").unwrap().paused);
         assert!(plan.tasks.iter().find(|task| task.id == "c").unwrap().running);

@@ -15,7 +15,7 @@ const exe =
   process.argv[2] ||
   path.join(root, 'target', process.platform === 'win32' ? 'debug' : 'debug', `workbar-mcp${process.platform === 'win32' ? '.exe' : ''}`);
 
-const dataDir = process.env.WORKBAR_DATA_DIR || path.join(root, '.devdata');
+const dataDir = process.env.WORKBAR_DATA_DIR || path.join(root, '.devdata', `mcp-sqlite-${Date.now()}`);
 fs.mkdirSync(dataDir, { recursive: true });
 
 if (!fs.existsSync(exe)) {
@@ -26,6 +26,7 @@ if (!fs.existsSync(exe)) {
 const child = spawn(exe, [], {
   env: { ...process.env, WORKBAR_DATA_DIR: dataDir },
   stdio: ['pipe', 'pipe', 'inherit'],
+  windowsHide: true,
 });
 
 let buffer = '';
@@ -82,6 +83,34 @@ function textOf(response) {
   return content.map((part) => part.text || '').join('\n');
 }
 
+function dataOf(response) { return JSON.parse(textOf(response)); }
+
+function independentClient(calls) {
+  return new Promise((resolve, reject) => {
+    const worker = spawn(exe, [], { env: { ...process.env, WORKBAR_DATA_DIR: dataDir }, windowsHide: true });
+    let output = '';
+    let errors = '';
+    const timer = setTimeout(() => { worker.kill(); reject(new Error('Independent MCP client timed out')); }, 20000);
+    worker.stdout.on('data', (part) => { output += part; });
+    worker.stderr.on('data', (part) => { errors += part; });
+    worker.on('error', (error) => { clearTimeout(timer); reject(error); });
+    worker.on('close', (code) => {
+      clearTimeout(timer);
+      try {
+        const replies = output.trim().split('\n').map((line) => JSON.parse(line));
+        if (code !== 0 || replies.length !== calls.length + 1 || replies.some((reply) => reply.error || reply.result?.isError)) {
+          throw new Error(`Independent MCP client failed: ${output} ${errors}`);
+        }
+        resolve(replies.slice(1));
+      } catch (error) { reject(error); }
+    });
+    const messages = [{ jsonrpc: '2.0', id: 0, method: 'initialize', params: {
+      protocolVersion: '2024-11-05', clientInfo: { name: 'parallel-smoke', version: '1' },
+    } }, ...calls.map((call, index) => ({ jsonrpc: '2.0', id: index + 1, method: 'tools/call', params: call }))];
+    worker.stdin.end(messages.map((message) => JSON.stringify(message)).join('\n') + '\n');
+  });
+}
+
 (async () => {
   try {
     const init = await request('initialize', {
@@ -99,22 +128,19 @@ function textOf(response) {
     const plan = await request('tools/call', {
       name: 'workbar_plan_day',
       arguments: {
-        intro: 'smoke test day',
         tasks: [
           { title: '写周报', start: '09:30', end: '10:00' },
           { title: '修 bug', start: '10:00', end: '11:00', est_min: 40 },
         ],
       },
     });
-    const planText = textOf(plan);
-    check('plan_day creates 2 tasks', planText.includes('2/0') || planText.includes('0/2'), '');
+    check('plan_day creates 2 tasks', dataOf(plan).tasks.length === 2);
 
     const got = await request('tools/call', { name: 'workbar_get_today', arguments: {} });
     const gotText = textOf(got);
     check('get_today returns tasks', gotText.includes('写周报') && gotText.includes('修 bug'));
 
-    const idMatch = /- \[ \] (t[0-9a-f]{8})/.exec(gotText);
-    const taskId = idMatch && idMatch[1];
+    const taskId = dataOf(got).tasks[0]?.id;
     check('get_today exposes ids', !!taskId, taskId || 'none');
 
     if (taskId) {
@@ -128,7 +154,7 @@ function textOf(response) {
         name: 'workbar_complete_task',
         arguments: { id: taskId },
       });
-      check('complete_task', !complete.error && textOf(complete).includes('[x]'));
+      check('complete_task', !complete.error && dataOf(complete).done === true && dataOf(complete).id === taskId);
 
       const bad = await request('tools/call', {
         name: 'workbar_update_task',
@@ -149,7 +175,7 @@ function textOf(response) {
       const startedText = textOf(started);
       check(
         'start_work adds a running stopwatch',
-        !started.error && startedText.includes('AI 冒烟工作') && startedText.includes('正计时')
+        !started.error && startedText.includes('AI 冒烟工作') && dataOf(started).timer === 'up' && dataOf(started).running
       );
 
       const finished = await request('tools/call', {
@@ -158,14 +184,16 @@ function textOf(response) {
       });
       check(
         'finish_work closes the session',
-        !finished.error && /\[x\][^\n]*AI 冒烟工作/.test(textOf(finished))
+        !finished.error && dataOf(finished).done && dataOf(finished).id === dataOf(started).id
       );
 
       const cleared = await request('tools/call', { name: 'workbar_clear_day', arguments: {} });
-      check('clear_day', !cleared.error && textOf(cleared).includes('(no tasks yet'));
+      check('clear_day', !cleared.error && dataOf(cleared).cleared === true);
     }
 
-    const readPlan = () => JSON.parse(fs.readFileSync(path.join(dataDir, 'plan.json'), 'utf8'));
+    let latestPlan = { tasks: [] };
+    const refresh = async () => { latestPlan = dataOf(await request('tools/call', { name: 'workbar_get_today', arguments: {} })); };
+    const readPlan = () => JSON.parse(JSON.stringify(latestPlan));
     const titles = () => readPlan().tasks.map((task) => task.title).join('|');
     const ids = () => readPlan().tasks.map((task) => task.id);
     const idOf = (title) => readPlan().tasks.find((task) => task.title === title).id;
@@ -173,11 +201,13 @@ function textOf(response) {
     const call = async (name, args) => {
       const result = await request('tools/call', { name, arguments: args });
       if (result.error || result.result?.isError) throw new Error(`${name}: ${textOf(result)}`);
+      await refresh();
       return result;
     };
     const rejectsUnchanged = async (name, args, label) => {
       const before = JSON.stringify(readPlan());
       const result = await request('tools/call', { name, arguments: args });
+      await refresh();
       check(label, result.result?.isError === true && JSON.stringify(readPlan()) === before);
     };
 
@@ -233,7 +263,43 @@ function textOf(response) {
     check('adding after an explicit time sort still appends normally', readPlan().tasks.at(-1).title === 'new-after-sort');
     await call('workbar_clear_day', {});
     const raw = readPlan();
-    check('plan.json is valid JSON with date', typeof raw.date === 'string' && raw.date.length === 10);
+    check('SQLite is the storage file', fs.readFileSync(path.join(dataDir, 'workbar.db')).subarray(0, 16).toString() === 'SQLite format 3\0');
+    check('no plan.json is created', !fs.existsSync(path.join(dataDir, 'plan.json')));
+    check('empty database still returns today', typeof raw.date === 'string' && raw.date.length === 10);
+
+    await call('workbar_plan_day', { tasks: Array.from({ length: 200 }, (_, index) => ({ title: `unrelated-${index}`, paused: true })) });
+    const smallStart = await call('workbar_start_work', { title: 'compact-result' });
+    const own = dataOf(smallStart);
+    check('start response contains only its new task even with 200 existing tasks', own.id && own.running && textOf(smallStart).length < 400 && !textOf(smallStart).includes('unrelated-'));
+    const smallFinish = await call('workbar_finish_work', { id: own.id });
+    check('finish response contains only its completed task', dataOf(smallFinish).done && dataOf(smallFinish).id === own.id && textOf(smallFinish).length < 400 && !textOf(smallFinish).includes('unrelated-'));
+    const onlyAdded = await call('workbar_add_tasks', { tasks: [{ title: 'one-new-task' }] });
+    check('addition response contains only the added task', dataOf(onlyAdded).tasks.length === 1 && dataOf(onlyAdded).tasks[0].title === 'one-new-task');
+    const onlyUpdated = await call('workbar_update_task', { id: own.id, title: 'renamed-session' });
+    check('update response contains only the target task', dataOf(onlyUpdated).id === own.id && !textOf(onlyUpdated).includes('unrelated-'));
+    const removedId = dataOf(onlyAdded).tasks[0].id;
+    const removed = await call('workbar_remove_task', { id: removedId });
+    check('remove returns only its target id and deletes only that task', dataOf(removed).id === removedId && dataOf(removed).removed && latestPlan.tasks.length === 201 && !latestPlan.tasks.some((task) => task.id === removedId));
+    await call('workbar_clear_day', {});
+
+    const base = dataOf(await call('workbar_start_work', { title: 'parallel-base' }));
+    await Promise.all([
+      ...Array.from({ length: 4 }, (_, worker) => independentClient(Array.from({ length: 8 }, (_, index) => ({
+        name: 'workbar_add_tasks', arguments: { tasks: [{ title: `client-${worker}-${index}` }] },
+      })))),
+      (async () => {
+        for (let index = 0; index < 8; index += 1) {
+          await call('workbar_update_task', { id: base.id, running: false });
+          await call('workbar_update_task', { id: base.id, running: true });
+        }
+      })(),
+    ]);
+    await refresh();
+    check('four independent MCP processes and simultaneous state changes lose no tasks', latestPlan.tasks.length === 33);
+    check('parallel writes leave every independent task idle', latestPlan.tasks.filter((task) => task.id !== base.id).every((task) => !task.running && !task.done));
+    const reopened = await independentClient([{ name: 'workbar_get_today', arguments: {} }]);
+    check('a newly started MCP process reads persisted tasks and the running timer', dataOf(reopened[0]).tasks.length === 33 && dataOf(reopened[0]).tasks.find((task) => task.id === base.id).running);
+    await call('workbar_clear_day', {});
   } catch (err) {
     console.error('ERROR', err.message);
     checks.push({ name: 'no crash', ok: false });

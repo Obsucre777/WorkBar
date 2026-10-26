@@ -116,7 +116,59 @@ function bootstrap() {
   let contentFitHeld = false;
   let nativeCollapsed = false;
   const pendingSaves = [];
+  const actionRequests = [];
+  let failRead = false;
+  let failAction = false;
+  let holdRead = false;
+  const pendingReads = [];
   if (window.parent.__fixturePlan) plan = clone(window.parent.__fixturePlan);
+  function prepare(next) {
+    next = clone(next);
+    next.date = today;
+    for (const task of next.tasks) {
+      task.elapsed_ms = Number.isFinite(task.elapsed_ms) ? task.elapsed_ms : (task.spent_sec || 0) * 1000;
+      if (task.running && !task.done) {
+        if (!Number.isFinite(task.running_since_ms)) task.running_since_ms = now;
+      } else {
+        if (Number.isFinite(task.running_since_ms)) task.elapsed_ms += Math.max(0, now - task.running_since_ms);
+        task.running_since_ms = null;
+      }
+      if (!task.running && !task.done && task.elapsed_ms > 0) task.paused = true;
+    }
+    return next;
+  }
+  plan = prepare(plan);
+  function readBackend() {
+    for (const task of plan.tasks) {
+      const minute = (value) => value ? Number(value.split(':')[0]) * 60 + Number(value.split(':')[1]) : null;
+      const start = minute(task.start);
+      const end = minute(task.end);
+      const current = new Date().getHours() * 60 + new Date().getMinutes();
+      if (!task.running && !task.paused && !task.done && task.elapsed_ms === 0
+          && start !== null && current >= start && (end === null || current < end)) {
+        task.running = true;
+        task.running_since_ms = now;
+      }
+    }
+    const result = clone(plan);
+    for (const task of result.tasks) {
+      task.spent_sec = Math.floor((task.elapsed_ms + (task.running ? Math.max(0, now - task.running_since_ms) : 0)) / 1000);
+    }
+    return result;
+  }
+  function performAction(args) {
+    const task = plan.tasks.find((item) => item.id === args.id);
+    if (!task) throw new Error('Task not found');
+    if (task.running && args.action !== 'start') {
+      task.elapsed_ms += Math.max(0, now - task.running_since_ms);
+    }
+    if (!task.running && args.action === 'start') task.running_since_ms = now;
+    if (args.action !== 'start') task.running_since_ms = null;
+    task.running = args.action === 'start';
+    task.paused = args.action === 'pause';
+    task.done = args.action === 'complete';
+    return readBackend();
+  }
   async function emit(name, payload) {
     for (const handler of listeners.get(name) || []) await handler({ payload });
   }
@@ -141,7 +193,12 @@ function bootstrap() {
     }
   }
   window.__smoke = {
-    getPlan: () => clone(plan),
+    getPlan: () => readBackend(),
+    actionRequests: () => clone(actionRequests),
+    failNextRead: () => { failRead = true; },
+    failNextAction: () => { failAction = true; },
+    holdNextRead: () => { holdRead = true; },
+    releaseRead: () => { const pending = pendingReads.shift(); if (pending) pending.resolve(pending.snapshot); },
     holdSaves: () => { blockSaves = true; },
     holdResizes: () => { blockResizes = true; },
     holdResizeCompletions: () => { blockResizeCompletions = true; },
@@ -156,15 +213,16 @@ function bootstrap() {
     pendingSaves: () => pendingSaves.length,
     releaseSave() {
       const pending = pendingSaves.shift();
-      if (pending) { plan = clone(pending.plan); pending.resolve(); }
+      if (pending) pending.resolve(performAction(pending.args));
     },
     releaseSaves() {
       blockSaves = false;
       while (pendingSaves.length) this.releaseSave();
     },
-    async setPlan(next) { plan = clone(next); await emit('plan-changed'); },
+    async setPlan(next) { plan = prepare(next); await emit('plan-changed'); },
     async setClock(hours, minutes, seconds = 0) {
       now = new RealDate(now).setHours(hours, minutes, seconds, 0);
+      await emit('plan-changed');
       await emit('clock-tick');
     },
     emit,
@@ -172,11 +230,19 @@ function bootstrap() {
   window.__TAURI__ = {
     core: {
       async invoke(command, args) {
-        if (command === 'get_plan') return clone(plan);
-        if (command === 'save_plan') {
-          if (blockSaves) await new Promise((resolve) => pendingSaves.push({ plan: clone(args.plan), resolve }));
-          else plan = clone(args.plan);
-          return;
+        if (command === 'get_plan') {
+          if (failRead) { failRead = false; throw new Error('Simulated database read error'); }
+          if (holdRead) {
+            holdRead = false;
+            return new Promise((resolve) => pendingReads.push({ resolve, snapshot: readBackend() }));
+          }
+          return readBackend();
+        }
+        if (command === 'task_action') {
+          actionRequests.push(clone(args));
+          if (failAction) { failAction = false; throw new Error('Simulated database write error'); }
+          if (blockSaves) return new Promise((resolve) => pendingSaves.push({ args: clone(args), resolve }));
+          return performAction(args);
         }
         if (command === 'trace_js') return;
         if (command === 'sync_task_count') {
@@ -495,6 +561,48 @@ async function runInBrowser() {
     const latest = slow.getPlan().tasks;
     assert('queued save preserves the final pause and sibling start', latest.find((task) => task.id === 'a').paused && !latest.find((task) => task.id === 'a').running && latest.find((task) => task.id === 'b').running);
     assert('queued save leaves idle siblings untouched', latest.find((task) => task.id === 'c').spent_sec === 0 && !latest.find((task) => task.id === 'c').running);
+
+    view = await fixture('independent-idle');
+    const race = view.win.__smoke;
+    race.holdSaves();
+    view.unit('a').querySelector('.ring').click();
+    const concurrent = race.getPlan();
+    concurrent.tasks.push({ id: 'new-mcp', title: 'added by MCP', timer: 'up', running: false });
+    await race.setPlan(concurrent);
+    race.releaseSaves();
+    await settled();
+    assert('a delayed UI action cannot remove a concurrent MCP addition', race.getPlan().tasks.some((task) => task.id === 'new-mcp') && Boolean(view.unit('new-mcp')));
+    assert('UI sends only id and action, never a task snapshot', race.actionRequests().every((args) => Object.keys(args).sort().join(',') === 'action,id'));
+
+    view = await fixture('base');
+    const stable = view.win.__smoke;
+    const runningBaseline = stable.getPlan().tasks.find((task) => task.id === 'a');
+    await stable.setClock(12, 5, 17);
+    assert('missed timer frames catch up from the persisted timestamp', view.unit('a').querySelector('.elapsed').textContent === '12:06');
+    assert('live timer refreshes never submit database writes', stable.actionRequests().length === 0);
+    assert('live timer refreshes preserve the persisted elapsed baseline', stable.getPlan().tasks.find((task) => task.id === 'a').elapsed_ms === runningBaseline.elapsed_ms);
+    stable.failNextRead();
+    await stable.emit('plan-changed');
+    assert('a database read failure keeps the last displayed tasks', Boolean(view.unit('a')) && Boolean(view.unit('b')) && stable.actionRequests().length === 0);
+    stable.failNextAction();
+    view.unit('a').querySelector('.ring').click();
+    await settled();
+    assert('a failed pause recovers the backend running state', view.unit('a').querySelector('.ring').dataset.mode === 'running' && stable.getPlan().tasks.find((task) => task.id === 'a').running);
+    assert('a failed action is surfaced and not blindly replayed', view.doc.getElementById('bar').title.includes('未保存') && stable.actionRequests().length === 1);
+
+    view = await fixture('independent-idle');
+    const delayed = view.win.__smoke;
+    delayed.holdNextRead();
+    const oldRead = delayed.emit('plan-changed');
+    view.unit('a').querySelector('.ring').click();
+    await settled();
+    delayed.holdNextRead();
+    delayed.releaseRead();
+    await oldRead;
+    await settled();
+    assert('a read started before an action cannot restore an obsolete idle state', view.unit('a').querySelector('.ring').dataset.mode === 'running');
+    delayed.releaseRead();
+    await settled();
 
     view = await fixture('base');
     overdue(view, 'a');

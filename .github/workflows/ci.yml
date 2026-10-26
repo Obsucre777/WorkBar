@@ -23,5 +23,11 @@ jobs:
       - name: MCP smoke test
         run: node scripts/smoke-mcp.js target/debug/workbar-mcp.exe
 
+      - name: Storage, timer and native tests
+        run: cargo test --workspace
+
+      - name: Renderer regression
+        run: node scripts/smoke-renderer.js
+
       - name: Check app crate
         run: cargo check -p workbar

@@ -253,14 +253,14 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("workbar-shortcut-only-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir(&directory).unwrap();
         let path = directory.join("shortcut.json");
-        fs::write(directory.join("plan.json"), b"untouched plan").unwrap();
+        fs::write(directory.join("workbar.db"), b"untouched database").unwrap();
         assert_eq!(read_preference(&path).unwrap(), DEFAULT_SHORTCUT);
         write_preference(&path, "Alt+W").unwrap();
         write_preference(&path, "Ctrl+Shift+J").unwrap();
         assert_eq!(read_preference(&path).unwrap(), "Ctrl+Shift+J");
-        assert_eq!(fs::read(directory.join("plan.json")).unwrap(), b"untouched plan");
+        assert_eq!(fs::read(directory.join("workbar.db")).unwrap(), b"untouched database");
         fs::remove_file(path).unwrap();
-        fs::remove_file(directory.join("plan.json")).unwrap();
+        fs::remove_file(directory.join("workbar.db")).unwrap();
         fs::remove_dir(directory).unwrap();
     }
 

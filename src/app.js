@@ -29,17 +29,14 @@
 
   let plan = { date: "", tasks: [] };
   let lastSnapshot = "";
-  let lastTickAt = Date.now();
-  // Fractional seconds waiting to be written into spent_sec, per running task.
-  // Two tick drivers (JS interval + native clock) can each deliver < 1s, and
-  // flooring a single sub-second delta every time would throw the time away.
-  const carryByTask = new Map();
   let slimSignature = "";
   let unitNodes = [];
-  let sinceSave = 0;
   let saving = false;
-  let saveQueued = false;
   let externalQueued = false;
+  let loading = false;
+  let readGeneration = 0;
+  let needsReconcile = false;
+  const pendingActions = [];
   let collapsed = false;
   let windowStart = 0;
   let windowAnchor = null;
@@ -154,21 +151,6 @@
       view.state = "complete";
       return view;
     }
-
-    // Every scheduled task starts independently. Explicit running/paused state
-    // wins over the clock, including a pause made before the first second.
-    const now = nowMinutes();
-    let startedByClock = false;
-    for (const task of pending) {
-      if (hasStarted(task)) continue;
-      const start = hhmmToMin(task.start);
-      const end = hhmmToMin(task.end);
-      if (start !== null && now >= start && (end === null || now < end)) {
-        task.running = true;
-        startedByClock = true;
-      }
-    }
-    if (startedByClock) saveNow();
 
     return view;
   }
@@ -700,41 +682,51 @@
     });
   }
 
-  // ------------------------------------------------------------------ save
+  // ----------------------------------------------------------- task actions
 
   function serialize() {
     return JSON.stringify(plan);
   }
 
-  async function saveNow() {
+  function applyAction(task, action) {
+    const now = Date.now();
+    const elapsed = task.elapsed_ms + (task.running && task.running_since_ms !== null
+      ? Math.max(0, now - task.running_since_ms) : 0);
+    task.elapsed_ms = elapsed;
+    task.running_since_ms = action === "start" ? now : null;
+    task.running = action === "start";
+    task.paused = action === "pause";
+    task.done = action === "complete";
+    task.spent_sec = Math.floor(elapsed / 1000);
+  }
+
+  async function queueAction(id, action) {
     if (!invoke) return;
-    saveQueued = true;
+    pendingActions.push({ id, action });
+    needsReconcile = true;
+    // Invalidate a read started before this optimistic interaction.
+    readGeneration += 1;
     if (saving) return;
     saving = true;
     try {
-      while (saveQueued) {
-        saveQueued = false;
-        const snapshot = serialize();
-        await invoke("save_plan", { plan: JSON.parse(snapshot) });
-        lastSnapshot = snapshot;
+      while (pendingActions.length) {
+        const operation = pendingActions[0];
+        try {
+          const fresh = await invoke("task_action", operation);
+          el.bar.removeAttribute("title");
+          if (pendingActions.length === 1) acceptPlan(fresh);
+        } catch (err) {
+          console.error("[workbar] task action failed", err);
+          el.bar.title = `任务修改未保存：${String(err)}。将恢复数据库中的任务状态。`;
+        }
+        pendingActions.shift();
       }
-    } catch (err) {
-      console.warn("[workbar] save failed", err);
     } finally {
       saving = false;
-      if (externalQueued) {
-        externalQueued = false;
-        externalChange();
-      }
-    }
-  }
-
-  function maybeSave(force) {
-    sinceSave += 1;
-    const hasRunningTasks = (plan.tasks || []).some((t) => t.running && !t.done);
-    if (force || (hasRunningTasks && sinceSave >= 12)) {
-      sinceSave = 0;
-      saveNow();
+      // Always refresh after the queue, including failures. Never persist an
+      // optimistic snapshot, and never replay a possibly committed operation.
+      externalQueued = false;
+      externalChange();
     }
   }
 
@@ -746,11 +738,10 @@
     if (view.state === "empty" || view.state === "complete") return;
     const task = (plan.tasks || []).find((t) => t.id === id);
     if (!task || task.done) return;
-    task.running = !task.running;
-    task.paused = !task.running;
-    carryByTask.delete(task.id);
+    const action = task.running ? "pause" : "start";
+    applyAction(task, action);
     render(computeView());
-    saveNow();
+    queueAction(id, action);
   }
 
   function completeTask(id) {
@@ -759,12 +750,9 @@
     if (!task || task.done) return;
     const refs = unitNodes.find((node) => node.taskId === id);
     if (refs) burst(refs.done);
-    task.done = true;
-    task.running = false;
-    task.paused = false;
-    carryByTask.delete(task.id);
+    applyAction(task, "complete");
     render(computeView());
-    saveNow();
+    queueAction(id, "complete");
   }
 
   function burst(button) {
@@ -825,7 +813,6 @@
     const next = raw && typeof raw === "object" ? raw : {};
     return {
       date: typeof next.date === "string" ? next.date : "",
-      intro: next.intro || undefined,
       tasks: Array.isArray(next.tasks)
         ? next.tasks.map((task) => ({
             id: String(task.id || ""),
@@ -835,6 +822,9 @@
             est_min: Math.max(0, Math.floor(Number(task.est_min) || 0)),
             timer: task.timer === "up" ? "up" : task.timer === "down" ? "down" : undefined,
             spent_sec: Math.max(0, Math.floor(Number(task.spent_sec) || 0)),
+            elapsed_ms: Math.max(0, Number.isFinite(task.elapsed_ms) ? task.elapsed_ms : Number(task.spent_sec || 0) * 1000),
+            running_since_ms: Number.isFinite(task.running_since_ms) ? task.running_since_ms : null,
+            plan_date: task.plan_date || next.date || todayString(),
             running: !!task.running && !task.done,
             paused: !!task.paused && !task.running && !task.done,
             done: !!task.done,
@@ -845,67 +835,59 @@
     };
   }
 
-  /** A plan left over from an earlier day rolls into today. Without this the
-   *  stale date drops computeView into the "empty" state, which hides the
-   *  finish button and blocks pausing while the task units still render —
-   *  the leftover work becomes impossible to control. */
-  function rollPlanDate() {
-    const today = todayString();
-    if (plan.date !== today) {
-      plan.date = today;
-      saveNow();
-    }
-  }
-
   async function loadPlan(immediate) {
+    const generation = ++readGeneration;
     if (invoke) {
       try {
-        plan = normalizePlan(await invoke("get_plan"));
+        const fresh = await invoke("get_plan");
+        if (generation !== readGeneration || saving) return;
+        plan = normalizePlan(fresh);
       } catch (err) {
         console.warn("[workbar] load failed", err);
-        plan = normalizePlan({});
+        // Keep the last usable state; a read error is never an empty plan.
+        el.bar.title = `暂时无法读取任务：${String(err)}。正在重试。`;
+        return;
       }
     } else {
       plan = normalizePlan(demoPlan());
     }
-    rollPlanDate();
     await syncWindowTaskCount((plan.tasks || []).filter((task) => !task.done).length);
     lastSnapshot = serialize();
+    settleTimers();
     render(computeView(), immediate !== false);
+  }
+
+  function acceptPlan(raw) {
+    const fresh = normalizePlan(raw);
+    const snapshot = JSON.stringify(fresh);
+    if (snapshot === lastSnapshot && !needsReconcile) return;
+    plan = fresh;
+    needsReconcile = false;
+    lastSnapshot = snapshot;
+    settleTimers();
+    render(computeView(), false);
   }
 
   async function externalChange() {
     if (!invoke) return;
-    if (saving) {
+    if (saving || loading) {
       externalQueued = true;
       return;
     }
-    let fresh;
+    loading = true;
+    const generation = ++readGeneration;
     try {
-      fresh = normalizePlan(await invoke("get_plan"));
-    } catch {
-      return;
+      const fresh = await invoke("get_plan");
+      if (generation === readGeneration && !saving) acceptPlan(fresh);
+    } catch (err) {
+      console.warn("[workbar] refresh failed", err);
+    } finally {
+      loading = false;
+      if (externalQueued && !saving) {
+        externalQueued = false;
+        externalChange();
+      }
     }
-    if (saving) {
-      externalQueued = true;
-      return;
-    }
-    const freshSnapshot = JSON.stringify(fresh);
-    if (freshSnapshot === lastSnapshot) return;
-
-    settleTimers();
-    // Keep elapsed time while respecting each task's externally supplied state.
-    const localById = new Map((plan.tasks || []).map((t) => [t.id, t]));
-    for (const task of fresh.tasks) {
-      const local = localById.get(task.id);
-      if (!local) continue;
-      task.spent_sec = Math.max(task.spent_sec, local.spent_sec);
-      if (local.running !== task.running || task.done) carryByTask.delete(task.id);
-    }
-    plan = fresh;
-    rollPlanDate();
-    lastSnapshot = serialize();
-    render(computeView(), false);
   }
 
   // ------------------------------------------------------------------- demo
@@ -913,7 +895,6 @@
   function demoPlan() {
     return {
       date: todayString(),
-      intro: "demo",
       tasks: [
         { id: "t1", title: "写周报", start: "09:30", end: "10:00", est_min: 30, spent_sec: 0 },
         { id: "t2", title: "修登录 bug", start: "10:00", end: "11:00", est_min: 60, spent_sec: 0 },
@@ -926,34 +907,19 @@
 
   function settleTimers() {
     const nowMs = Date.now();
-    const delta = Math.max(0, (nowMs - lastTickAt) / 1000);
-    lastTickAt = nowMs;
-
-    const running = (plan.tasks || []).filter((t) => !t.done && t.running);
-    let changed = false;
-    for (const task of running) {
-      const carry = (carryByTask.get(task.id) || 0) + delta;
-      const whole = Math.floor(carry);
-      carryByTask.set(task.id, carry - whole);
-      if (whole > 0) {
-        task.spent_sec = Math.floor(Number(task.spent_sec || 0)) + whole;
-        changed = true;
-      }
+    for (const task of plan.tasks || []) {
+      const elapsed = task.elapsed_ms + (task.running && task.running_since_ms !== null
+        ? Math.max(0, nowMs - task.running_since_ms) : 0);
+      const seconds = Math.floor(elapsed / 1000);
+      task.spent_sec = seconds;
     }
-    // Forget carries of tasks that stopped running.
-    for (const id of Array.from(carryByTask.keys())) {
-      if (!running.some((task) => task.id === id)) carryByTask.delete(id);
-    }
-    return changed;
   }
 
   function tick() {
     try {
-      // running across midnight must not leave the plan stale for a day
-      rollPlanDate();
-      const changed = settleTimers();
+      if (plan.date !== todayString()) externalChange();
+      settleTimers();
       const view = computeView();
-      if (changed) maybeSave(false);
       render(view, false);
     } catch (err) {
       console.error("[workbar] tick failed", err);
@@ -1029,7 +995,6 @@
   async function boot() {
     wire();
     await loadPlan(true);
-    lastTickAt = Date.now();
     setInterval(tick, 1000);
   }
 

@@ -557,15 +557,11 @@ fn toggle_bar(app: &AppHandle) {
 
 fn spawn_plan_watcher(app: AppHandle) {
     std::thread::spawn(move || {
-        let path = workbar_core::plan_path();
-        let mut last = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         loop {
             std::thread::sleep(Duration::from_millis(800));
-            let current = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-            if current != last {
-                last = current;
-                let _ = app.emit("plan-changed", ());
-            }
+            // Poll through the storage API: WAL commits need not change the
+            // main database file's mtime. This also recovers missed events.
+            let _ = app.emit("plan-changed", ());
         }
     });
 }
@@ -588,13 +584,15 @@ fn spawn_clock(app: AppHandle) {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn get_plan() -> Result<workbar_core::Plan, String> {
-    workbar_core::load()
+async fn get_plan() -> Result<workbar_core::Plan, String> {
+    tauri::async_runtime::spawn_blocking(workbar_core::load)
+        .await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-fn save_plan(plan: workbar_core::Plan) -> Result<(), String> {
-    workbar_core::replace(&plan)
+async fn task_action(id: String, action: String) -> Result<workbar_core::Plan, String> {
+    tauri::async_runtime::spawn_blocking(move || workbar_core::set_task_state(&id, &action))
+        .await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -676,7 +674,7 @@ fn app_info() -> serde_json::Value {
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "dataDir": workbar_core::data_dir().display().to_string(),
-        "planPath": workbar_core::plan_path().display().to_string(),
+        "databasePath": workbar_core::database_path().display().to_string(),
         "today": workbar_core::today(),
     })
 }
@@ -796,7 +794,7 @@ fn main() {
         )
         .invoke_handler(tauri::generate_handler![
             get_plan,
-            save_plan,
+            task_action,
             sync_task_count,
             set_collapsed,
             hide_bar,

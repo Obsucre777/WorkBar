@@ -10,3 +10,4 @@ description = "Shared plan model, validation and storage for the Workbar app and
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+rusqlite = { version = "0.41", features = ["bundled"] }

@@ -15,7 +15,7 @@
 - 收起态细线：
   - down：从两端向中间收缩；
   - up：**固定宽度**（12%）+ 运行时亮度呼吸；暂停时静态偏暗。
-- MCP：`plan_day` / `add_tasks` / `update_task` 都支持 `timer`；工具返回里正计时任务显示为"正计时"。
+- MCP：`plan_day` / `add_tasks` / `update_task` 都支持 `timer`；工具返回里正计时任务使用 `timer: "up"`。
 - 没做（保留为不做的边界）：番茄周期、通知音、暂停历史、自定义提醒。
 
 ## 2. 多任务同时计时 + 单行多任务单元（✅ 已实现，2026-10-21）
@@ -101,10 +101,10 @@
 - 两个 MCP 工具：
   - `workbar_start_work({title})`：新建一个 `timer: "up"`、`running: true`、带 `source`（客户端名）的任务，保留其他任务的原有状态。
   - `workbar_finish_work({id?})`：只停表并完成指定任务（保留记录）；仅当本客户端只有一个未完成会话时才可省略 id，有多个候选则要求明确 id，不按任务位置或创建先后选择，也不结束其他客户端的会话。
-- 提示词通过三条通道下发（全部在 Workbar 侧，不写任何客户端规则文件）：
+- 提示词通过两条通道下发（全部在 Workbar 侧，不写任何客户端规则文件）：
   1. MCP `instructions` 第 7 条（会被注入的客户端：Claude Code、DSH）；
   2. `workbar_start_work` / `workbar_finish_work` 的工具描述（`tools/list`，必达通道）；
-  3. 每次工具返回文本末尾的 "Work session convention" / "AI work session open" 提醒（调用后必达，用于兜底）。
+  - 2026-10-26：取消工具返回末尾的重复流程提醒，写入结果只包含本次涉及的任务。
 - 已知客户端差异：**CodeBuddy 不注入 MCP instructions，且默认把 MCP 工具当延迟工具**（ToolSearch），所以它的模型不会主动调用；给它的 server 配置加 `"alwaysLoad": true` 可让工具直接加载，但仍可能需要用户明说一句才触发。README 已记录。
 
 **补充决定（2026-10-22）**：不再指望各客户端的 MCP instructions 都能生效。

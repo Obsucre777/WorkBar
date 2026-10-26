@@ -1,20 +1,12 @@
-//! Shared plan model, validation and storage for Workbar.
-//!
-//! The Electron-free, runtime-free core used by both the floating bar app and
-//! the `workbar-mcp` server. Everything lives in a single human-readable file:
-//!
-//! ```text
-//! %APPDATA%\Workbar\plan.json
-//! ```
-//!
-//! Writes are atomic (temp file + rename) and serialized through a small lock
-//! file so the app and an MCP server can safely update the plan at the same time.
+//! Shared task model and SQLite storage for the floating bar and MCP clients.
+//! Timers are persisted as an elapsed baseline and a running timestamp.
 
 use serde::{Deserialize, Serialize};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
+
+mod storage;
+pub use storage::{load, set_task_state, update, Store};
 
 pub const APP_DIR: &str = "Workbar";
 pub const DEFAULT_EST_MIN: u32 = 25;
@@ -40,7 +32,7 @@ impl Default for TimerMode {
 }
 
 /// One short piece of work shown on the bar.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     #[serde(default)]
     pub id: String,
@@ -60,6 +52,13 @@ pub struct Task {
     pub timer: Option<TimerMode>,
     #[serde(default)]
     pub spent_sec: u64,
+    /// Settled time only. The running interval is never periodically written.
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running_since_ms: Option<i64>,
+    #[serde(default)]
+    pub plan_date: String,
     #[serde(default)]
     pub running: bool,
     /// Explicitly paused, including a pause before the first elapsed second.
@@ -96,6 +95,9 @@ impl Default for Task {
             est_min: 0,
             timer: None,
             spent_sec: 0,
+            elapsed_ms: 0,
+            running_since_ms: None,
+            plan_date: String::new(),
             running: false,
             paused: false,
             done: false,
@@ -111,17 +113,8 @@ pub struct Plan {
     /// `YYYY-MM-DD` in local time.
     #[serde(default)]
     pub date: String,
-    /// One line that says what today is really about.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intro: Option<String>,
-    /// Legacy client metadata, retained only to read and round-trip old plans.
-    /// Task state and rendering no longer depend on this field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_id: Option<String>,
     #[serde(default)]
     pub tasks: Vec<Task>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -141,8 +134,8 @@ pub fn data_dir() -> PathBuf {
     }
 }
 
-pub fn plan_path() -> PathBuf {
-    data_dir().join("plan.json")
+pub fn database_path() -> PathBuf {
+    data_dir().join("workbar.db")
 }
 
 // ---------------------------------------------------------------------------
@@ -271,96 +264,6 @@ pub fn normalize_task(task: &mut Task) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Storage
-// ---------------------------------------------------------------------------
-
-pub fn load() -> Result<Plan, String> {
-    let path = plan_path();
-    match fs::read_to_string(&path) {
-        Ok(raw) if raw.trim().is_empty() => Ok(Plan::default()),
-        Ok(raw) => serde_json::from_str(&raw).map_err(|e| format!("plan.json 解析失败：{e}")),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Plan::default()),
-        Err(err) => Err(format!("读取 plan.json 失败：{err}")),
-    }
-}
-
-fn save_unlocked(plan: &Plan) -> Result<(), String> {
-    let dir = data_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败：{e}"))?;
-    let path = plan_path();
-    let tmp = path.with_extension("json.tmp");
-    let mut body = serde_json::to_string_pretty(plan).map_err(|e| e.to_string())?;
-    body.push('\n');
-    fs::write(&tmp, body).map_err(|e| format!("写入临时文件失败：{e}"))?;
-    fs::rename(&tmp, &path).map_err(|e| format!("替换 plan.json 失败：{e}"))?;
-    Ok(())
-}
-
-struct Lock {
-    path: PathBuf,
-}
-
-impl Drop for Lock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-fn acquire_lock() -> Result<Lock, String> {
-    let dir = data_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败：{e}"))?;
-    let path = dir.join(".lock");
-    for _ in 0..150 {
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                let _ = writeln!(file, "{}", std::process::id());
-                return Ok(Lock { path });
-            }
-            Err(_) => {
-                // Break locks left behind by a crashed process.
-                if let Ok(meta) = fs::metadata(&path) {
-                    if let Ok(modified) = meta.modified() {
-                        let stale = SystemTime::now()
-                            .duration_since(modified)
-                            .map(|age| age.as_secs() > 15)
-                            .unwrap_or(false);
-                        if stale {
-                            let _ = fs::remove_file(&path);
-                            continue;
-                        }
-                    }
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
-    }
-    Err("plan.json 正被另一个进程写入，请稍后重试".to_string())
-}
-
-/// Replace the whole plan (used by the bar app for timer state).
-pub fn replace(plan: &Plan) -> Result<(), String> {
-    let _lock = acquire_lock()?;
-    save_unlocked(plan)
-}
-
-/// Read-modify-write under the lock. Used by every MCP mutation.
-pub fn update<F>(mutate: F) -> Result<Plan, String>
-where
-    F: FnOnce(&mut Plan) -> Result<(), String>,
-{
-    let _lock = acquire_lock()?;
-    let mut plan = load()?;
-    if plan.date.trim().is_empty() {
-        plan.date = today();
-    }
-    mutate(&mut plan)?;
-    // The array is the queue order. Normal edits must never reorder tasks.
-    plan.updated_at = Some(chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string());
-    save_unlocked(&plan)?;
-    Ok(plan)
-}
-
-// ---------------------------------------------------------------------------
 // MCP-facing helpers
 // ---------------------------------------------------------------------------
 
@@ -377,9 +280,6 @@ pub fn summarize(plan: &Plan) -> String {
         plan.tasks.iter().filter(|t| t.done).count(),
         plan.tasks.len()
     ));
-    if let Some(intro) = plan.intro.as_deref().filter(|s| !s.trim().is_empty()) {
-        out.push_str(&format!("today: {intro}\n"));
-    }
     for task in &plan.tasks {
         let mark = if task.done {
             "x"
@@ -471,9 +371,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_current_id_does_not_mark_or_start_a_task() {
+    fn tasks_have_no_implicit_current_identity() {
         let plan = Plan {
-            current_id: Some("b".into()),
             tasks: vec![
                 Task { id: "a".into(), title: "a".into(), ..Task::default() },
                 Task { id: "b".into(), title: "b".into(), ..Task::default() },
@@ -488,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn session_hint_does_not_pick_one_task_by_position() {
+    fn read_result_contains_each_task_once_without_workflow_instructions() {
         let plan = Plan {
             tasks: vec![
                 Task { id: "a".into(), title: "a".into(), source: Some("one".into()), ..Task::default() },
@@ -497,25 +396,13 @@ mod tests {
             ..Plan::default()
         };
         let result = tool_result_text(&plan, "test");
-        assert!(result.contains("2 independent AI work sessions open"));
-        assert!(result.contains("with the intended task's id"));
+        assert_eq!(result.matches("\"id\": \"a\"").count(), 1);
+        assert!(!result.contains("workbar_finish_work"));
     }
 }
 
-/// Summary tailored for a tool result: headline + human summary + raw JSON.
+/// Read results contain one representation, without a duplicate task summary.
 pub fn tool_result_text(plan: &Plan, message: &str) -> String {
-    // Footer reminder: models read tool results, so this is the most reliable
-    // place to repeat the work-session convention (clients may ignore
-    // `instructions`, but every client passes tool results back to the model).
-    let open_sessions = plan.tasks.iter().filter(|task| task.source.is_some() && !task.done).count();
-    let hint = if open_sessions > 0 {
-        format!("{open_sessions} independent AI work sessions open. Call workbar_finish_work with the intended task's id when that job is done; other tasks keep their states.")
-    } else {
-        "Work session convention: before doing any job for the user, call workbar_start_work with a 3-8 character title; when the job is done, call workbar_finish_work with that task's id.".to_string()
-    };
-    format!(
-        "{message}\n\n{}\n\n{hint}\n```json\n{}\n```",
-        summarize(plan),
-        serde_json::to_string_pretty(plan).unwrap_or_else(|_| "{}".to_string())
-    )
+    serde_json::to_string_pretty(&serde_json::json!({ "message": message,
+        "date": plan.date, "tasks": plan.tasks })).expect("serializable task result")
 }
