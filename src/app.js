@@ -9,6 +9,8 @@
   const RING_LEN = 2 * Math.PI * 18;
   const MAX_VISIBLE_TASKS = 4;
   const TASK_COLOR_COUNT = 4;
+  const CARD_MOTION = { duration: 320, delay: 35, easing: "cubic-bezier(.16,1,.3,1)", fill: "backwards" };
+  const BROWSE_MOTION = { duration: 240, delay: 0, easing: "cubic-bezier(.22,1,.36,1)", fill: "backwards" };
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -243,20 +245,15 @@
     }
     viewportMotion?.cancel();
     viewportMotion = null;
-    for (const [node, animation] of leavingUnits) {
-      animation.cancel();
+    for (const [node, entry] of leavingUnits) {
+      entry.animation.cancel();
       node.remove();
     }
     leavingUnits.clear();
   }
 
-  function animateCard(refs, frames) {
-    const animation = refs.root.animate(frames, {
-      duration: 320,
-      delay: 35,
-      easing: "cubic-bezier(.16,1,.3,1)",
-      fill: "backwards",
-    });
+  function animateCard(refs, frames, timing = CARD_MOTION) {
+    const animation = refs.root.animate(frames, timing);
     refs.motion = animation;
     const release = () => {
       if (refs.motion === animation) refs.motion = null;
@@ -264,7 +261,7 @@
     animation.finished.then(release, release);
   }
 
-  function exitUnit(refs, rect, origin, opacity) {
+  function exitUnit(refs, rect, origin, opacity, travel = null) {
     const node = refs.root;
     delete node.dataset.id;
     node.classList.add("unit-exit");
@@ -273,19 +270,27 @@
     node.style.left = `${rect.left - origin.left}px`;
     node.style.top = `${rect.top - origin.top}px`;
     el.viewport.append(node);
-    const animation = node.animate([
+    const frames = travel === null ? [
       { opacity, transform: "translateX(0) scale(1)" },
       { opacity: 0, transform: "translateX(-12px) scale(.96)" },
-    ], { duration: 150, easing: "ease-out" });
-    leavingUnits.set(node, animation);
+    ] : [
+      { opacity, transform: "translateX(0)" },
+      { opacity, transform: `translateX(${travel}px)` },
+    ];
+    const animation = node.animate(frames, travel === null ? { duration: 150, easing: "ease-out" } : BROWSE_MOTION);
+    const entry = { refs, animation };
+    leavingUnits.set(node, entry);
     const release = () => {
+      // A reversed browse may already have reclaimed this exact card. Its
+      // cancelled exit must not remove the live node in a later microtask.
+      if (leavingUnits.get(node) !== entry) return;
       node.remove();
       leavingUnits.delete(node);
     };
     animation.finished.then(release, release);
   }
 
-  function ensureUnits(tasks, immediate, previousWidth) {
+  function ensureUnits(tasks, immediate, previousWidth, navigation = 0) {
     const ids = tasks.length ? tasks.map((task) => task.id) : [null];
     const animate = !immediate && !collapsed && !reducedMotion()
       && typeof el.units.animate === "function" && unitNodes.length > 0;
@@ -294,11 +299,14 @@
       return unitNodes;
     }
 
-    // Read the currently painted positions before cancelling an earlier move,
-    // so a second completion can continue smoothly from the middle of it.
-    const before = new Map(unitNodes.map((refs) => [refs.taskId, refs.root.getBoundingClientRect()]));
-    const opacity = new Map(unitNodes.map((refs) => [refs.taskId, Number(getComputedStyle(refs.root).opacity)]));
-    const previous = new Map(unitNodes.map((refs) => [refs.taskId, refs]));
+    // Include still-visible outgoing cards: an immediate direction reversal
+    // reuses the same nodes and their painted positions, without duplicate
+    // ghosts or a jump back to the beginning of the previous animation.
+    const candidates = [...unitNodes, ...Array.from(leavingUnits.values(), (entry) => entry.refs)];
+    const clip = el.viewport.getBoundingClientRect();
+    const before = new Map(candidates.map((refs) => [refs.taskId, refs.root.getBoundingClientRect()]));
+    const opacity = new Map(candidates.map((refs) => [refs.taskId, Number(getComputedStyle(refs.root).opacity)]));
+    const previous = new Map(candidates.map((refs) => [refs.taskId, refs]));
     if (!animate) stopCardMotion();
     else {
       for (const refs of unitNodes) {
@@ -307,18 +315,25 @@
       }
       viewportMotion?.cancel();
       viewportMotion = null;
+      for (const [node, entry] of leavingUnits) {
+        leavingUnits.delete(node);
+        entry.animation.cancel();
+      }
     }
     const next = ids.map((id) => {
       const refs = previous.get(id) || createUnit();
       refs.taskId = id;
+      refs.root.classList.remove("unit-exit");
+      refs.root.inert = false;
+      refs.root.removeAttribute("aria-hidden");
+      refs.root.style.left = "";
+      refs.root.style.top = "";
       return refs;
     });
-    const origin = el.viewport.getBoundingClientRect();
-    for (const refs of unitNodes) {
-      if (ids.includes(refs.taskId)) continue;
-      if (animate) exitUnit(refs, before.get(refs.taskId), origin, opacity.get(refs.taskId));
-      else refs.root.remove();
-    }
+    const outgoing = candidates.filter((refs) => !ids.includes(refs.taskId));
+    // Detach departures before measuring the new layout; their painted
+    // rectangles above are enough to put visible ones in a temporary overlay.
+    for (const refs of outgoing) refs.root.remove();
     next.forEach((refs, index) => {
       const current = el.units.children[index];
       if (current !== refs.root) el.units.insertBefore(refs.root, current || null);
@@ -326,11 +341,26 @@
     unitNodes = next;
     if (!animate) return next;
 
+    const origin = el.viewport.getBoundingClientRect();
     const after = new Map(next.map((refs) => [refs.taskId, refs.root.getBoundingClientRect()]));
     const shifts = next.filter((refs) => before.has(refs.taskId))
       .map((refs) => before.get(refs.taskId).left - after.get(refs.taskId).left);
     const entryOffset = shifts.find((shift) => Math.abs(shift) > 0.5)
-      || parseFloat(getComputedStyle(el.units).getPropertyValue("--card-width"));
+      || (navigation || 1) * parseFloat(getComputedStyle(el.units).getPropertyValue("--card-width"));
+    const timing = navigation ? BROWSE_MOTION : CARD_MOTION;
+    for (const refs of outgoing) {
+      const rect = before.get(refs.taskId);
+      // Rapid clicks can skip cards that never reached the clipped viewport;
+      // keep only departures that still have visible pixels to animate.
+      if (rect.right > clip.left + 0.5 && rect.left < clip.right - 0.5) {
+        // An interrupted completion may leave an overlay between card slots;
+        // its final position must still be completely outside the viewport.
+        const travel = !navigation ? null : entryOffset > 0
+          ? Math.min(-entryOffset, clip.left - rect.right)
+          : Math.max(-entryOffset, clip.right - rect.left);
+        exitUnit(refs, rect, origin, opacity.get(refs.taskId), travel);
+      }
+    }
     for (const refs of next) {
       const old = before.get(refs.taskId);
       const target = after.get(refs.taskId);
@@ -342,13 +372,13 @@
           animateCard(refs, [
             { transform: `translate(${dx}px, ${dy}px)`, opacity: alpha },
             { transform: "translate(0, 0)", opacity: 1 },
-          ]);
+          ], timing);
         }
       } else {
         animateCard(refs, [
-          { transform: `translateX(${refs.taskId === null ? 16 : entryOffset}px)`, opacity: 0.55 },
+          { transform: `translateX(${refs.taskId === null ? 16 : entryOffset}px)`, opacity: navigation ? 1 : 0.55 },
           { transform: "translateX(0)", opacity: 1 },
-        ]);
+        ], timing);
       }
     }
     const width = parseFloat(el.viewport.style.width);
@@ -418,9 +448,11 @@
 
   function moveTaskWindow(direction) {
     const pending = pendingTasks();
-    windowStart = Math.max(0, Math.min(windowStart + direction, pending.length - windowCapacity));
+    const nextStart = Math.max(0, Math.min(windowStart + direction, pending.length - windowCapacity));
+    if (nextStart === windowStart) return;
+    windowStart = nextStart;
     windowAnchor = pending[windowStart]?.id || null;
-    render(computeView(), true);
+    render(computeView(), false, direction);
   }
 
   function unitTarget(view, task) {
@@ -496,10 +528,10 @@
     };
   }
 
-  function renderUnits(view, pending, immediate) {
+  function renderUnits(view, pending, immediate, navigation) {
     const previousWidth = el.viewport.getBoundingClientRect().width;
     const list = computeUnits(pending);
-    const nodes = ensureUnits(list, immediate, previousWidth);
+    const nodes = ensureUnits(list, immediate, previousWidth, navigation);
     nodes.forEach((refs, index) => {
       const task = list[index] || null;
       refs.taskId = task ? task.id : null;
@@ -535,13 +567,13 @@
     return list;
   }
 
-  function render(view, immediate) {
+  function render(view, immediate, navigation = 0) {
     const { bar } = el;
     bar.dataset.state = view.state;
     bar.classList.toggle("complete", view.state === "complete");
 
     const pending = pendingTasks();
-    renderUnits(view, pending, immediate);
+    renderUnits(view, pending, immediate, navigation);
     renderSlim(view, pending);
 
     return view;
