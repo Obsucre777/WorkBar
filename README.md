@@ -14,6 +14,4 @@
 
 一句话安排今天的计划，把工作交给 AI，任务与计时同步呈现在桌面顶部。
 
-[![WorkBar 演示：AI 安排计划与工作计时](docs/assets/workbar-demo-cover.jpg)](<WorkBar的github演示视频.mp4>)
-
-[▶ 观看完整演示（45 秒）](<WorkBar的github演示视频.mp4>)
+https://github.com/user-attachments/assets/1e673ea5-3aaa-479c-bc71-75f23e90c5b1
