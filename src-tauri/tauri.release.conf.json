@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "../target/release/workbar-mcp.exe": "workbar-mcp.exe",
+      "../LICENSE": "LICENSE",
+      "../scripts/portable/README-试用.txt": "README-试用.txt"
+    }
+  }
+}
