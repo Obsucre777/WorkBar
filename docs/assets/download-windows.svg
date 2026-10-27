@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="252" height="56" viewBox="0 0 252 56" role="img" aria-labelledby="title desc">
+  <title id="title">下载 Windows 版</title>
+  <desc id="desc">WorkBar Windows x64 安装包</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="252" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7682ff"/>
+      <stop offset="1" stop-color="#5966df"/>
+    </linearGradient>
+  </defs>
+  <rect x="0.5" y="0.5" width="251" height="55" rx="13.5" fill="url(#background)" stroke="#fff" stroke-opacity="0.2"/>
+  <g fill="#fff">
+    <path d="M20 18h9v9h-9zm11 0h9v9h-9zM20 29h9v9h-9zm11 0h9v9h-9z" opacity="0.95"/>
+    <text x="55" y="34" font-family="Segoe UI, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600">下载 Windows 版</text>
+  </g>
+  <g fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.9">
+    <path d="M224 18v14m-5-5 5 5 5-5M217 35v3h14v-3"/>
+  </g>
+</svg>
