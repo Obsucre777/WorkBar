@@ -1,4 +1,4 @@
-WorkBar 0.0.2 · Windows x64
+WorkBar 0.0.3 · Windows x64
 =====================
 
 【方式一：绿色版（推荐先试）】
