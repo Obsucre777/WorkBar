@@ -1,7 +1,7 @@
 ﻿# Workbar 卸载器（绿色版 / 简易安装版都适用）：删除程序、快捷方式，
 # 并把安装目录从用户 PATH 里移除（-KeepPath 可保留）。
 param(
-    [string]$Dest = (Join-Path $env:LOCALAPPDATA 'Programs\Workbar'),
+    [string]$Dest = (Join-Path $env:LOCALAPPDATA 'Programs\WorkBar'),
     [switch]$PurgeData,
     [switch]$KeepPath,
     [switch]$DryRun
@@ -12,15 +12,15 @@ $src = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $src 'win-helpers.ps1')
 
 Write-Host ""
-Write-Host "  Workbar 卸载" -ForegroundColor Cyan
+Write-Host "  WorkBar 卸载" -ForegroundColor Cyan
 Write-Host "  ------------------------------------------"
 
 # 结束 Workbar 本体和 AI 客户端拉起的 workbar-mcp，否则目录删不干净。
 Stop-WorkbarProcesses
 
 foreach ($lnk in @(
-    (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Workbar.lnk'),
-    (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Workbar.lnk')
+    (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\WorkBar.lnk'),
+    (Join-Path ([Environment]::GetFolderPath('Desktop')) 'WorkBar.lnk')
 )) {
     if (Test-Path $lnk) {
         Remove-Item $lnk -Force -ErrorAction SilentlyContinue

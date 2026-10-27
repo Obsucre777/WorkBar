@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 if ($env:CI -ne 'true' -or -not $env:RUNNER_TEMP) {
     throw 'Run installer integration checks only on a disposable Windows CI runner.'
 }
-$uninstallRegistryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Workbar'
+$uninstallRegistryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\WorkBar'
 if (Test-Path $uninstallRegistryPath) {
     throw 'Refusing to replace an existing WorkBar installation.'
 }
@@ -33,7 +33,7 @@ function Install-Workbar([string]$Directory) {
     $matches = @((Get-WorkbarUserPath) -split ';' | Where-Object { Test-WorkbarPathEntry $_ $Directory })
     Assert ($matches.Count -eq 1) 'The real user PATH contains exactly one installation entry'
     $entry = Get-ItemProperty -LiteralPath $uninstallRegistryPath -ErrorAction Stop
-    Assert ($entry.DisplayName -ieq 'Workbar') 'Windows has a named WorkBar entry for Installed apps and Control Panel'
+    Assert ($entry.DisplayName -ceq 'WorkBar') 'Windows displays the exact WorkBar name in Installed apps and Control Panel'
     Assert ($entry.DisplayVersion -eq $expectedVersion) 'The uninstall entry displays the installed version'
     Assert ($entry.SystemComponent -ne 1 -and $entry.NoRemove -ne 1) 'The Windows uninstall entry is visible and allows removal'
     Assert ($entry.UninstallString.Trim('"') -ieq (Join-Path $Directory 'uninstall.exe')) 'Windows points to the correct uninstaller'

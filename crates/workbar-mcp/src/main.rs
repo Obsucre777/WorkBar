@@ -142,10 +142,10 @@ fn initialize_result(params: &Value) -> Value {
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": {
             "name": SERVER_NAME,
-            "title": "Workbar",
+            "title": "WorkBar",
             "version": SERVER_VERSION
         },
-        "instructions": "Workbar is the user's always-on-top floating work bar on Windows. Each task has its own independent timer and state; no task has priority because of its position or a current-task marker. The bar is the single source of truth for today's plan. \
+        "instructions": "WorkBar is the user's always-on-top floating work bar on Windows. Each task has its own independent timer and state; no task has priority because of its position or a current-task marker. The bar is the single source of truth for today's plan. \
 \n\nWhen to call tools (do it proactively, do not just print a plan in chat): whenever the user talks about today's plan, their tasks, what to do next, finishing something, moving/renaming a task, or asks for a schedule. \
 \n\nWorkflow rules:\n\
 1. Call workbar_get_today before reading or editing so you reuse existing task ids and see which task the bar is showing.\n\
@@ -209,14 +209,14 @@ fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "workbar_get_today",
-            "title": "Read today's Workbar plan",
+            "title": "Read today's WorkBar plan",
             "description": "Read the user's current day plan: tasks, ids, time windows, estimates, and how much time was actually spent. Call this first before editing. If you are about to do a job for the user, call workbar_start_work first so the bar shows it.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         }),
         json!({
             "name": "workbar_start_work",
             "title": "Show that you are working",
-            "description": "REQUIRED FIRST STEP whenever the user gives you a job to do — any research, lookup, check, writing, coding, fixing, summarizing, planning or building task, even a small one like \"what's the weather?\" or \"is X configured?\". Before running any other tool (web search, file reads, commands), summarize the job into a 3-8 character title and call this: the Workbar floating bar immediately shows that job as a running stopwatch. When the job is finished, call workbar_finish_work so the task is marked done. Only skip this for pure chit-chat or clarifying questions. Do NOT announce the stopwatch in your answer; just use the tools.",
+            "description": "REQUIRED FIRST STEP whenever the user gives you a job to do — any research, lookup, check, writing, coding, fixing, summarizing, planning or building task, even a small one like \"what's the weather?\" or \"is X configured?\". Before running any other tool (web search, file reads, commands), summarize the job into a 3-8 character title and call this: the WorkBar floating bar immediately shows that job as a running stopwatch. When the job is finished, call workbar_finish_work so the task is marked done. Only skip this for pure chit-chat or clarifying questions. Do NOT announce the stopwatch in your answer; just use the tools.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -427,7 +427,7 @@ fn tool_get_today(_args: &Value) -> Value {
                     workbar_core::today()
                 ));
             }
-            text.push_str(&workbar_core::tool_result_text(&plan, "今日 Workbar 计划"));
+            text.push_str(&workbar_core::tool_result_text(&plan, "今日 WorkBar 计划"));
             text_result(text)
         }
         Err(err) => error_result(err),

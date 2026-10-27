@@ -43,7 +43,7 @@ try {
         Write-Host "已创建示例任务：$(Join-Path $DataDir 'workbar.db')"
     }
     if (-not $NoStart) {
-        Start-Process -FilePath (Join-Path $here 'Workbar.exe') -WindowStyle Hidden
+        Start-Process -FilePath (Join-Path $here 'WorkBar.exe') -WindowStyle Hidden
     }
 } finally {
     $env:WORKBAR_DATA_DIR = $previousDataDir

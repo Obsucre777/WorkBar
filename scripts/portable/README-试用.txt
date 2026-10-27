@@ -11,11 +11,11 @@ WorkBar 0.0.2 · Windows x64
 双击：
     install.cmd
 它会：
-  - 先结束正在运行的 Workbar（方便覆盖更新）
-  - 复制 Workbar.exe / workbar-mcp.exe 到 %LOCALAPPDATA%\Programs\Workbar
+  - 先结束正在运行的 WorkBar（方便覆盖更新）
+  - 复制 WorkBar.exe / workbar-mcp.exe 到 %LOCALAPPDATA%\Programs\WorkBar
   - 创建桌面 + 开始菜单快捷方式
   - 把安装目录加入【用户 PATH】（这样 MCP 客户端直接写 workbar-mcp 即可）
-  - 直接启动 Workbar
+  - 直接启动 WorkBar
 卸载：双击 uninstall.cmd（会同时把该目录从 PATH 移除）
 
 【展开态】
@@ -37,7 +37,7 @@ WorkBar 0.0.2 · Windows x64
 
 【安装向导版】
 也可以下载 WorkBar-setup-win64.exe，按向导安装。
-安装包包含 Workbar.exe 和 workbar-mcp.exe，并会按需安装 WebView2。
+安装包包含主程序和 workbar-mcp.exe，并会按需安装 WebView2。
 安装器会自动把安装目录加入当前用户的 PATH，卸载时移除对应目录项。
 安装完成后，请完全退出并重新打开终端和 AI 客户端，再使用 workbar-mcp 命令接入。
 
@@ -73,7 +73,7 @@ workbar-mcp.exe 是标准 MCP stdio server。
         command: workbar-mcp
 
   兜底（PATH 没生效时）：把 workbar-mcp 换成
-    C:\Users\<你>\AppData\Local\Programs\Workbar\workbar-mcp.exe
+    C:\Users\<你>\AppData\Local\Programs\WorkBar\workbar-mcp.exe
 
 配好后直接跟 AI 说：
   "帮我排一下今天：上午写周报，10 点修登录 bug，下午写 README，晚上运动"
@@ -91,4 +91,4 @@ workbar-mcp.exe 是标准 MCP stdio server。
 崩溃日志：%APPDATA%\Workbar\crash.log（有异常时把这个发我）
 绿色版：退出后删掉本文件夹即可移除程序，任务数据会保留。
 使用 install.cmd 安装的版本：用 uninstall.cmd 卸载。
-安装向导版：在 Windows 的“已安装的应用”中卸载 Workbar。
+安装向导版：在 Windows 的“已安装的应用”中卸载 WorkBar。

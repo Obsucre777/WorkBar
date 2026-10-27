@@ -184,7 +184,7 @@ fn second_instance_exit() -> bool {
         return false;
     }
 
-    let title: Vec<u16> = "Workbar".encode_utf16().chain(std::iter::once(0)).collect();
+    let title: Vec<u16> = "WorkBar".encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         if let Ok(hwnd) = FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) {
             if !hwnd.0.is_null() {
@@ -731,7 +731,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     shortcut_settings::attach_menu(app.handle(), show_item.clone());
     let shortcut_item = MenuItem::with_id(app, "shortcut", "设置快捷键…", true, None::<&str>)?;
     let data_item = MenuItem::with_id(app, "data", "打开数据目录", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", "退出 Workbar", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "退出 WorkBar", true, None::<&str>)?;
 
     let menu = Menu::with_items(
         app,
@@ -746,7 +746,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     )?;
 
     let mut builder = TrayIconBuilder::with_id("main")
-        .tooltip("Workbar")
+        .tooltip("WorkBar")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id.as_ref() {
@@ -889,7 +889,7 @@ fn main() {
         .run(tauri::generate_context!())
         .inspect_err(|error| log_boot(&format!("event loop exited with error: {error}")))
         .inspect(|_| log_boot("event loop exited cleanly"))
-        .expect("error while running Workbar");
+        .expect("error while running WorkBar");
 }
 
 #[cfg(test)]

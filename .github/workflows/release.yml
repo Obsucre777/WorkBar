@@ -64,7 +64,7 @@ jobs:
         shell: pwsh
         run: |
           $packageDir = New-Item -ItemType Directory -Force dist/portable
-          Copy-Item target/release/workbar.exe "$packageDir/Workbar.exe"
+          Copy-Item target/release/workbar.exe "$packageDir/WorkBar.exe"
           Copy-Item target/release/workbar-mcp.exe "$packageDir/workbar-mcp.exe"
           Copy-Item scripts/portable/* $packageDir
           Copy-Item LICENSE $packageDir
@@ -85,7 +85,7 @@ jobs:
         shell: pwsh
         run: |
           Expand-Archive dist/WorkBar-portable-win64.zip dist/verify
-          foreach ($name in @('Workbar.exe', 'workbar-mcp.exe', 'try-workbar.cmd', 'seed-demo.ps1', 'install.cmd', 'install.ps1', 'uninstall.cmd', 'uninstall.ps1', 'win-helpers.ps1', 'path-helpers.ps1', 'README-试用.txt', 'LICENSE')) {
+          foreach ($name in @('WorkBar.exe', 'workbar-mcp.exe', 'try-workbar.cmd', 'seed-demo.ps1', 'install.cmd', 'install.ps1', 'uninstall.cmd', 'uninstall.ps1', 'win-helpers.ps1', 'path-helpers.ps1', 'README-试用.txt', 'LICENSE')) {
             if (-not (Test-Path -LiteralPath "dist/verify/$name")) { throw "Missing package file: $name" }
           }
           node scripts/smoke-mcp.js dist/verify/workbar-mcp.exe

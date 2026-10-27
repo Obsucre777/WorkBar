@@ -4,7 +4,7 @@
 # 覆盖正在运行的 .exe 时 Windows 会锁文件，所以顺序是：
 #   结束旧进程 → 覆盖前检查占用 → 带重试地复制 → 失败时告诉用户该关哪个 AI 客户端
 param(
-    [string]$Dest = (Join-Path $env:LOCALAPPDATA 'Programs\Workbar'),
+    [string]$Dest = (Join-Path $env:LOCALAPPDATA 'Programs\WorkBar'),
     [switch]$NoShortcut,
     [switch]$NoStart,
     [switch]$NoPath,
@@ -16,11 +16,11 @@ $src = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $src 'win-helpers.ps1')
 
 Write-Host ""
-Write-Host "  Workbar 安装器" -ForegroundColor Cyan
+Write-Host "  WorkBar 安装器" -ForegroundColor Cyan
 Write-Host "  ------------------------------------------"
 Write-Host "  安装到: $Dest"
 
-$files = @('Workbar.exe', 'workbar-mcp.exe')
+$files = @('WorkBar.exe', 'workbar-mcp.exe')
 foreach ($name in $files) {
     $from = Join-Path $src $name
     if (-not (Test-Path -LiteralPath $from)) {
@@ -84,16 +84,16 @@ foreach ($name in $files) {
 if (-not $NoShortcut -and -not $DryRun) {
     $shell = New-Object -ComObject WScript.Shell
     $targets = @(
-        (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Workbar.lnk'),
-        (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Workbar.lnk')
+        (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\WorkBar.lnk'),
+        (Join-Path ([Environment]::GetFolderPath('Desktop')) 'WorkBar.lnk')
     )
     foreach ($lnkPath in $targets) {
         try {
             $lnk = $shell.CreateShortcut($lnkPath)
-            $lnk.TargetPath = Join-Path $Dest 'Workbar.exe'
+            $lnk.TargetPath = Join-Path $Dest 'WorkBar.exe'
             $lnk.WorkingDirectory = $Dest
-            $lnk.IconLocation = (Join-Path $Dest 'Workbar.exe') + ',0'
-            $lnk.Description = 'Workbar - 现在该干什么'
+            $lnk.IconLocation = (Join-Path $Dest 'WorkBar.exe') + ',0'
+            $lnk.Description = 'WorkBar - 现在该干什么'
             $lnk.Save()
             Write-Host "  ✓ 快捷方式: $lnkPath" -ForegroundColor Green
         } catch {
@@ -117,5 +117,5 @@ Write-Host "    claude mcp add --scope user workbar -- workbar-mcp" -ForegroundC
 Write-Host ""
 
 if (-not $NoStart -and -not $DryRun) {
-    Start-Process -FilePath (Join-Path $Dest 'Workbar.exe')
+    Start-Process -FilePath (Join-Path $Dest 'WorkBar.exe') -WindowStyle Hidden
 }

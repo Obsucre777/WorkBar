@@ -67,7 +67,7 @@
     draft = shortcut;
     stopRecording().catch(error => status(String(error), true));
     status(!shortcut.includes("+") && (/^[A-Z0-9]$/.test(shortcut) || typingKeys.has(shortcut))
-      ? "已录入。注意：这个键单用会在所有程序里触发 Workbar，打字时会受影响。"
+      ? "已录入。注意：这个键单用会在所有程序里触发 WorkBar，打字时会受影响。"
       : "已录入，点击保存后生效。");
   }
   function onKey(event) {
@@ -88,7 +88,7 @@
   async function load() {
     await stopRecording().catch(() => {});
     try {
-      if (!invoke) throw new Error("请从 Workbar 托盘菜单打开此窗口。");
+      if (!invoke) throw new Error("请从 WorkBar 托盘菜单打开此窗口。");
       saved = await invoke("get_shortcut");
       draft = saved.shortcut;
       status(saved.error || "", Boolean(saved.error));

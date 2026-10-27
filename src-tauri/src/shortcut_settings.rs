@@ -158,7 +158,7 @@ pub fn save_shortcut(app: AppHandle, shortcut: String) -> Result<ShortcutInfo, S
         if !already_registered {
             if let Err(cleanup) = app.global_shortcut().unregister(candidate) {
                 eprintln!("[workbar] shortcut rollback failed: {cleanup}");
-                return Err(format!("{error}。原快捷键仍有效；新组合释放失败，请重启 Workbar。"));
+                return Err(format!("{error}。原快捷键仍有效；新组合释放失败，请重启 WorkBar。"));
             }
         }
         return Err(error);
@@ -166,7 +166,7 @@ pub fn save_shortcut(app: AppHandle, shortcut: String) -> Result<ShortcutInfo, S
     let error = previous.filter(|key| *key != candidate).and_then(|key| {
         app.global_shortcut().unregister(key).err().map(|error| {
             eprintln!("[workbar] old shortcut release failed: {error}");
-            "新快捷键已保存，旧组合释放失败，请重启 Workbar".into()
+            "新快捷键已保存，旧组合释放失败，请重启 WorkBar".into()
         })
     });
     let info = ShortcutInfo { shortcut: value, default_shortcut: DEFAULT_SHORTCUT, registered: true, error };
@@ -217,7 +217,7 @@ pub fn open(app: &AppHandle) {
                 return Ok(());
             }
             let mut builder = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("shortcut-settings.html".into()))
-                .title("Workbar · 快捷键").inner_size(440.0, 320.0).center().resizable(false)
+                .title("WorkBar · 快捷键").inner_size(440.0, 320.0).center().resizable(false)
                 .maximizable(false).minimizable(false).decorations(false).shadow(false).transparent(true)
                 .background_color(tauri::utils::config::Color(0, 0, 0, 0)).always_on_top(true).visible(false);
             if let Some(main) = app.config().app.windows.iter().find(|window| window.label == "main") {

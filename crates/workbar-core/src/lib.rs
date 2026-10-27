@@ -271,7 +271,7 @@ pub fn normalize_task(task: &mut Task) -> Result<(), String> {
 pub fn summarize(plan: &Plan) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "Workbar · {} · {}/{} done\n",
+        "WorkBar · {} · {}/{} done\n",
         if plan.date.is_empty() {
             "(no day yet)"
         } else {
