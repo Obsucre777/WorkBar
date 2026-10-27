@@ -94,6 +94,10 @@ https://github.com/user-attachments/assets/1e673ea5-3aaa-479c-bc71-75f23e90c5b1
 
 本项目基于 [MIT License](LICENSE) 开源。
 
+## 友情链接
+
+[LINUX DO](https://linux.do/) · 新的理想型社区
+
 ## Star 趋势
 
 <a href="https://www.star-history.com/?repos=Obsucre777%2FWorkBar&amp;type=date">
