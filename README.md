@@ -2,10 +2,13 @@
   <img src="build/app-icon.png" width="112" height="112" alt="WorkBar Logo" />
 </p>
 
-<h1 align="center">
-  WorkBar<br />
-  <sub>简洁小巧，专注当下。</sub>
-</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/workbar-title-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/workbar-title-light.svg" />
+    <img src="docs/assets/workbar-title-light.svg" width="480" height="88" alt="WorkBar · 简洁小巧，专注当下。" />
+  </picture>
+</p>
 
 <p align="center">
   一款 AI 原生的轻量桌面任务工具，让任务进展尽在掌握。
