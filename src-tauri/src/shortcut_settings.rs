@@ -5,7 +5,7 @@ use std::{fs, io::Write, path::Path, sync::{atomic::{AtomicBool, Ordering}, Mute
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 
-pub const DEFAULT_SHORTCUT: &str = "Ctrl+Alt+W";
+pub const DEFAULT_SHORTCUT: &str = "Alt+W";
 const LABEL: &str = "shortcut-settings";
 
 #[derive(Clone, Serialize)]

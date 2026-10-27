@@ -75,3 +75,31 @@ https://github.com/user-attachments/assets/1e673ea5-3aaa-479c-bc71-75f23e90c5b1
    ```
 
 4. **安排第一项任务**：跟 AI 说：“帮我把写项目文档加入 WorkBar，预计 30 分钟。”任务会同步出现在桌面顶部。
+
+## 常用操作
+
+| 操作 | 方式 |
+| --- | --- |
+| 暂停 / 继续计时 | 点击任务圆环。 |
+| 标记任务完成 | 点击任务旁的 ✓ 按钮。 |
+| 浏览更多任务 | 点击左右箭头。 |
+| 收起 / 展开 | 默认按 `Alt+W`，也可点击托盘图标；收起后点击顶部细线即可展开。 |
+| 修改快捷键 | 右键托盘图标 →「设置快捷键」。 |
+| 开机自启 | 右键托盘图标 →「开机自启」。 |
+| 退出程序 | 右键托盘图标 →「退出 WorkBar」。 |
+
+## 反馈与开源协议
+
+遇到问题或有建议，欢迎提交 [Issue](https://github.com/Obsucre777/WorkBar/issues)。
+
+本项目基于 [MIT License](LICENSE) 开源。
+
+## Star 趋势
+
+<a href="https://www.star-history.com/?repos=Obsucre777%2FWorkBar&amp;type=date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Obsucre777/WorkBar&amp;type=date&amp;theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Obsucre777/WorkBar&amp;type=date" />
+    <img alt="WorkBar Star 趋势" src="https://api.star-history.com/chart?repos=Obsucre777/WorkBar&amp;type=date" />
+  </picture>
+</a>

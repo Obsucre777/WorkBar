@@ -6,7 +6,7 @@
   const el = Object.fromEntries(["recorder", "keys", "recordingText", "hint", "status", "restore", "cancel", "close", "save"].map(id => [id, document.getElementById(id)]));
   const labels = { Control: "Ctrl", Space: "空格", Backquote: "`", Minus: "−", Equal: "=", ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→" };
   const named = new Set(["Space", "Tab", "Enter", "Backspace", "Delete", "Insert", "Home", "End", "PageUp", "PageDown", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Backquote", "Minus", "Equal", "BracketLeft", "BracketRight", "Backslash", "Semicolon", "Quote", "Comma", "Period", "Slash"]);
-  let saved, draft = "Ctrl+Alt+W", recording = false, arming = false, busy = false, capture = 0;
+  let saved, draft = "Alt+W", recording = false, arming = false, busy = false, capture = 0;
   let pending = Promise.resolve();
 
   function status(text = "", error = false) {

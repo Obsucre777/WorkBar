@@ -727,7 +727,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     )?;
     let autostart_for_handler = autostart_item.clone();
 
-    let show_item = MenuItem::with_id(app, "show", "收起 / 展开  (Ctrl+Alt+W)", true, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, "show", format!("收起 / 展开  ({})", shortcut_settings::DEFAULT_SHORTCUT), true, None::<&str>)?;
     shortcut_settings::attach_menu(app.handle(), show_item.clone());
     let shortcut_item = MenuItem::with_id(app, "shortcut", "设置快捷键…", true, None::<&str>)?;
     let data_item = MenuItem::with_id(app, "data", "打开数据目录", true, None::<&str>)?;
