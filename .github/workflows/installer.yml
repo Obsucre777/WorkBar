@@ -1,0 +1,67 @@
+name: installer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/installer.yml'
+      - '.github/workflows/release.yml'
+      - 'scripts/portable/**'
+      - 'scripts/windows/**'
+      - 'scripts/test-windows-*.ps1'
+      - 'src-tauri/**'
+      - 'crates/**'
+      - 'src/**'
+      - 'Cargo.*'
+      - 'package*.json'
+  pull_request:
+    paths:
+      - '.github/workflows/installer.yml'
+      - '.github/workflows/release.yml'
+      - 'scripts/portable/**'
+      - 'scripts/windows/**'
+      - 'scripts/test-windows-*.ps1'
+      - 'src-tauri/**'
+      - 'crates/**'
+      - 'src/**'
+      - 'Cargo.*'
+      - 'package*.json'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+      - run: npm ci
+      - name: Test Windows PATH handling
+        shell: powershell
+        run: ./scripts/test-windows-path.ps1
+      - name: Build MCP server
+        run: cargo build --release --locked -p workbar-mcp
+      - name: Build Windows installer
+        run: npm run build -- --config src-tauri/tauri.release.conf.json --ci
+      - name: Test installer PATH lifecycle
+        timeout-minutes: 5
+        shell: powershell
+        run: |
+          $installer = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1 -ExpandProperty FullName
+          ./scripts/test-windows-installer.ps1 -Installer $installer
+      - name: Save verified installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbar-windows-installer
+          if-no-files-found: error
+          path: |
+            target/release/bundle/nsis/*-setup.exe
+            target/release/workbar-mcp.exe

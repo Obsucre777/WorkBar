@@ -41,6 +41,10 @@ jobs:
             throw 'Release tag must match the app version.'
           }
 
+      - name: Test Windows PATH handling
+        shell: powershell
+        run: ./scripts/test-windows-path.ps1
+
       - name: Test storage, timers and native behavior
         run: cargo test --workspace --locked
 
@@ -72,11 +76,16 @@ jobs:
           Copy-Item target/release/bundle/nsis/*-setup.exe dist/WorkBar-setup-win64.exe
           Copy-Item target/release/workbar-mcp.exe dist/workbar-mcp.exe
 
+      - name: Test installer PATH lifecycle
+        timeout-minutes: 5
+        shell: powershell
+        run: ./scripts/test-windows-installer.ps1 -Installer dist/WorkBar-setup-win64.exe
+
       - name: Verify portable package and create checksums
         shell: pwsh
         run: |
           Expand-Archive dist/WorkBar-portable-win64.zip dist/verify
-          foreach ($name in @('Workbar.exe', 'workbar-mcp.exe', 'try-workbar.cmd', 'seed-demo.ps1', 'install.cmd', 'install.ps1', 'uninstall.cmd', 'uninstall.ps1', 'win-helpers.ps1', 'README-试用.txt', 'LICENSE')) {
+          foreach ($name in @('Workbar.exe', 'workbar-mcp.exe', 'try-workbar.cmd', 'seed-demo.ps1', 'install.cmd', 'install.ps1', 'uninstall.cmd', 'uninstall.ps1', 'win-helpers.ps1', 'path-helpers.ps1', 'README-试用.txt', 'LICENSE')) {
             if (-not (Test-Path -LiteralPath "dist/verify/$name")) { throw "Missing package file: $name" }
           }
           node scripts/smoke-mcp.js dist/verify/workbar-mcp.exe

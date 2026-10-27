@@ -1,4 +1,4 @@
-WorkBar 0.0.1 · Windows x64
+WorkBar 0.0.2 · Windows x64
 =====================
 
 【方式一：绿色版（推荐先试）】
@@ -38,24 +38,28 @@ WorkBar 0.0.1 · Windows x64
 【安装向导版】
 也可以下载 WorkBar-setup-win64.exe，按向导安装。
 安装包包含 Workbar.exe 和 workbar-mcp.exe，并会按需安装 WebView2。
-接入 AI 时，请使用安装目录下 workbar-mcp.exe 的绝对路径。
+安装器会自动把安装目录加入当前用户的 PATH，卸载时移除对应目录项。
+安装完成后，请完全退出并重新打开终端和 AI 客户端，再使用 workbar-mcp 命令接入。
 
 【接 AI（MCP）】
 workbar-mcp.exe 是标准 MCP stdio server。
-如果使用绿色包里的 install.cmd 安装，安装目录会加入用户 PATH；
+使用安装向导版或绿色包里的 install.cmd 安装，安装目录都会加入用户 PATH；
 【完全重启】一次 AI 客户端后，可以直接使用 workbar-mcp 命令。
-如果使用安装向导版或直接运行绿色版，请将下面的命令替换为 MCP 程序的绝对路径。
+如果直接运行未安装的绿色版，请将下面的命令替换为 MCP 程序的绝对路径。
 
   先验证（新开一个终端）：
     where workbar-mcp
 
   Claude Code：
-    claude mcp add --scope user workbar -- workbar-mcp
+    claude mcp add --transport stdio --scope user workbar -- workbar-mcp
 
   Cursor / 其它 JSON 客户端：
     {"mcpServers":{"workbar":{"command":"workbar-mcp"}}}
 
-  Codex（~/.codex/config.toml）：
+  Codex（一行命令接入）：
+    codex mcp add workbar -- workbar-mcp
+
+  也可以手动配置 Codex（~/.codex/config.toml）：
     [mcp_servers.workbar]
     command = "workbar-mcp"
 
