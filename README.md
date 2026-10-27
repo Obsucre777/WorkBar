@@ -35,49 +35,29 @@ https://github.com/user-attachments/assets/1e673ea5-3aaa-479c-bc71-75f23e90c5b1
 </p>
 
 1. **安装并启动**：运行安装包，完成安装后打开 WorkBar。安装器会自动将 `workbar-mcp` 加入当前用户的 PATH。
-2. **接入 MCP**：重新打开终端和 AI 客户端，选择下方对应的接入方式。以下方式适用于 Windows 本机运行的客户端。
+2. **接入 MCP**：完全退出并重新打开 AI 客户端，将下方提示词复制给它，让 AI 帮你完成接入。若在 VS Code 等编辑器内使用，也请重启编辑器。
 
-   **国内客户端**
+   适用于能执行本机命令或修改 MCP 配置的客户端。需要授权或重启时，按 AI 的提示完成即可。
 
-   | AI 客户端 | 接入命令 / 方式 |
-   | --- | --- |
-   | [CodeBuddy Code](https://www.codebuddy.cn/docs/cli/mcp) | `codebuddy mcp add --transport stdio --scope user workbar -- workbar-mcp` |
-   | [ZCode](https://zcode.z.ai/cn/docs/mcp-services) | 设置 → MCP 服务器 → 新建 MCP 服务器，作用域选「用户」，类型选 `stdio`，填写下方通用信息后添加并启用。 |
-   | [Kimi Code CLI（新版）](https://www.kimi.com/code/docs/kimi-code-cli/customization/mcp.html) | 在会话中运行 `/mcp-config`，新增 stdio 服务，填写下方通用信息；保存后新建会话。 |
-   | [MiMo Code（小米）](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/cli/src/cli/cmd/mcp.ts) | 运行 `mimo mcp add`，如提示作用域则选 `Global`，服务类型选 `Local`，按提示填写下方通用信息。 |
-   | [Qwen Code（通义千问）](https://qwenlm.github.io/qwen-code-docs/en/users/features/mcp/) | `qwen mcp add --scope user --transport stdio workbar workbar-mcp` |
+   ```text
+   请帮我把本机已安装的 WorkBar 接入当前 AI 客户端的 MCP。
 
-   通过界面或向导添加时，服务名称填写 `workbar`，启动命令填写 `workbar-mcp`，参数留空。
+   WorkBar 的接入信息：
 
-   **国外客户端**
+   - 服务名称：`workbar`
+   - 传输方式：`stdio`
+   - 启动命令：`workbar-mcp`，安装时已加入 PATH
+   - 无需启动参数、API Key 或远程地址
 
-   | AI 客户端 | 接入命令 / 方式 |
-   | --- | --- |
-   | [Claude Code](https://code.claude.com/docs/en/mcp) | `claude mcp add --transport stdio --scope user workbar -- workbar-mcp` |
-   | [Codex](https://developers.openai.com/codex/mcp) | `codex mcp add workbar -- workbar-mcp` |
-   | [Gemini CLI](https://geminicli.com/docs/tools/mcp-server/) | `gemini mcp add --scope user --transport stdio workbar workbar-mcp` |
-   | [Cursor](https://cursor.com/docs/mcp) | 将下方 JSON 配置合并到用户目录下的 `.cursor/mcp.json`。 |
-   | [VS Code / GitHub Copilot](https://code.visualstudio.com/docs/agent-customization/mcp-servers) | 按 `Ctrl+Shift+P`，运行 `MCP: Add Server`，选择 `Command (stdio)`，输入 `workbar-mcp`，服务名称填 `workbar`，保存到用户配置。 |
+   请先检查启动命令是否可用，再确认当前客户端支持的 MCP 接入方式，尽量直接完成配置。
+   优先使用用户级配置，保留已有的其他 MCP 服务；
+   如果 WorkBar 已接入，检查现有配置即可，避免重复添加。
 
-   <details>
-   <summary>展开 Cursor 的 JSON 配置示例</summary>
-
-   已有其它 MCP 服务时，将 `workbar` 条目加入现有的 `mcpServers` 中。
-
-   ```json
-   {
-     "mcpServers": {
-       "workbar": {
-         "type": "stdio",
-         "command": "workbar-mcp",
-         "args": []
-       }
-     }
-   }
+   配置后，请验证连接和工具是否可用，验证时仅查询信息，不要改动我的任务。
+   如果需要授权、重启客户端或新建会话，请明确告诉我下一步该做什么。
+   若无法自动完成，请给出最少的手动操作步骤。
    ```
-
-   </details>
 
 3. **安排第一项任务**：跟 AI 说：“帮我把写项目文档加入 WorkBar，预计 30 分钟。”任务会同步出现在桌面顶部。
 
-其它支持本地 MCP 的客户端，将服务启动命令设为 `workbar-mcp` 即可。更多配置示例见 [使用说明](scripts/portable/README-试用.txt)。
+需要手动接入时，可参考 [使用说明](scripts/portable/README-试用.txt) 中的配置示例。
