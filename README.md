@@ -6,7 +6,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/workbar-title-dark.svg" />
     <source media="(prefers-color-scheme: light)" srcset="docs/assets/workbar-title-light.svg" />
-    <img src="docs/assets/workbar-title-light.svg" width="480" height="88" alt="WorkBar · 简洁小巧，专注当下。" />
+    <img src="docs/assets/workbar-title-light.svg" width="480" height="88" alt="WorkBar · 简洁小巧，专注当下" />
   </picture>
 </p>
 
@@ -15,8 +15,6 @@
 </p>
 
 ## 使用演示
-
-让你和 AI 正在做的事，始终可见
 
 https://github.com/user-attachments/assets/1e673ea5-3aaa-479c-bc71-75f23e90c5b1
 
