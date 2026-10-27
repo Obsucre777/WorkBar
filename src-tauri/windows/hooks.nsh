@@ -26,10 +26,15 @@ Var WorkbarPreviousInstallDir
 
 !macro NSIS_HOOK_PREINSTALL
   ReadRegStr $WorkbarPreviousInstallDir SHCTX "${MANUPRODUCTKEY}" ""
+  !insertmacro CheckIfAppIsRunning "$INSTDIR\workbar-mcp.exe" "WorkBar MCP"
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
   !insertmacro WorkbarUpdateUserPath Add
+!macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+  !insertmacro CheckIfAppIsRunning "$INSTDIR\workbar-mcp.exe" "WorkBar MCP"
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

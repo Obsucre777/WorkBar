@@ -4,11 +4,13 @@ $ErrorActionPreference = 'Stop'
 if ($env:CI -ne 'true' -or -not $env:RUNNER_TEMP) {
     throw 'Run installer integration checks only on a disposable Windows CI runner.'
 }
-if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Workbar') {
+$uninstallRegistryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Workbar'
+if (Test-Path $uninstallRegistryPath) {
     throw 'Refusing to replace an existing WorkBar installation.'
 }
 . (Join-Path $PSScriptRoot 'portable/path-helpers.ps1')
 $installerPath = (Resolve-Path -LiteralPath $Installer).Path
+$expectedVersion = (Get-Content (Join-Path $PSScriptRoot '../package.json') -Raw | ConvertFrom-Json).version
 $originalUserPath = Get-WorkbarUserPath
 $originalProcessPath = $env:Path
 $environmentKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
@@ -17,6 +19,7 @@ if ($environmentKey) { $environmentKey.Dispose() }
 $testRoot = Join-Path $env:RUNNER_TEMP ('workbar-installer-' + [Guid]::NewGuid().ToString('N'))
 $firstDirectory = Join-Path $testRoot "WorkBar $([char]0x6d4b)$([char]0x8bd5)"
 $secondDirectory = Join-Path $testRoot 'WorkBar updated'
+$heldMcp = $null
 
 function Assert($Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
@@ -29,12 +32,34 @@ function Install-Workbar([string]$Directory) {
     Assert (Test-Path -LiteralPath (Join-Path $Directory 'workbar-mcp.exe')) 'The installer includes the MCP executable'
     $matches = @((Get-WorkbarUserPath) -split ';' | Where-Object { Test-WorkbarPathEntry $_ $Directory })
     Assert ($matches.Count -eq 1) 'The real user PATH contains exactly one installation entry'
+    $entry = Get-ItemProperty -LiteralPath $uninstallRegistryPath -ErrorAction Stop
+    Assert ($entry.DisplayName -ieq 'Workbar') 'Windows has a named WorkBar entry for Installed apps and Control Panel'
+    Assert ($entry.DisplayVersion -eq $expectedVersion) 'The uninstall entry displays the installed version'
+    Assert ($entry.SystemComponent -ne 1 -and $entry.NoRemove -ne 1) 'The Windows uninstall entry is visible and allows removal'
+    Assert ($entry.UninstallString.Trim('"') -ieq (Join-Path $Directory 'uninstall.exe')) 'Windows points to the correct uninstaller'
 }
-function Uninstall-Workbar([string]$Directory) {
+function Uninstall-Workbar([string]$Directory, [switch]$UseRegisteredEntry) {
     $uninstaller = Join-Path $Directory 'uninstall.exe'
+    if ($UseRegisteredEntry) {
+        $entry = Get-ItemProperty -LiteralPath $uninstallRegistryPath -ErrorAction Stop
+        $uninstaller = $entry.UninstallString.Trim('"')
+        Assert ($uninstaller -ieq (Join-Path $Directory 'uninstall.exe')) 'The Windows-registered uninstall command targets this installation'
+    }
     $process = Start-Process -FilePath $uninstaller -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
     Assert ($process.ExitCode -eq 0) 'Uninstaller succeeds'
     Assert (-not (Test-Path -LiteralPath (Join-Path $Directory 'workbar-mcp.exe'))) 'The MCP executable is removed'
+}
+function Start-HeldMcp([string]$Directory) {
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = Join-Path $Directory 'workbar-mcp.exe'
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardInput = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($info)
+    Assert (-not $process.WaitForExit(250)) 'An MCP client is holding the installed executable open'
+    return $process
 }
 function Test-McpCommand([string]$Directory) {
     # Model the environment of a newly opened terminal without changing this runner's parent.
@@ -76,15 +101,27 @@ try {
     Install-Workbar $firstDirectory
     Test-McpCommand $firstDirectory
     $afterFirstInstall = Get-WorkbarUserPath
+    $heldMcp = Start-HeldMcp $firstDirectory
     Install-Workbar $firstDirectory
+    Assert ($heldMcp.WaitForExit(10000)) 'Reinstall closes the MCP process before replacing its executable'
+    $heldMcp.Dispose()
+    $heldMcp = $null
     Assert ((Get-WorkbarUserPath) -ceq $afterFirstInstall) 'Reinstalling keeps the complete user PATH unchanged'
     Install-Workbar $secondDirectory
     Assert (-not @((Get-WorkbarUserPath) -split ';' | Where-Object { Test-WorkbarPathEntry $_ $firstDirectory }).Count) 'Moving the installation removes the old PATH entry'
     Test-McpCommand $secondDirectory
-    Uninstall-Workbar $secondDirectory
+    $heldMcp = Start-HeldMcp $secondDirectory
+    Uninstall-Workbar $secondDirectory -UseRegisteredEntry
+    Assert ($heldMcp.WaitForExit(10000)) 'Windows uninstall closes the MCP process before removing its executable'
+    $heldMcp.Dispose()
+    $heldMcp = $null
+    Assert (-not (Test-Path -LiteralPath $uninstallRegistryPath)) 'Uninstall removes the Windows Installed apps entry'
     Assert ((Get-WorkbarUserPath) -ceq $originalUserPath) 'Uninstall restores all unrelated PATH entries exactly'
 } finally {
     $env:Path = $originalProcessPath
+    if ($heldMcp) {
+        try { if (-not $heldMcp.HasExited) { $heldMcp.Kill(); $heldMcp.WaitForExit() } } finally { $heldMcp.Dispose() }
+    }
     foreach ($directory in @($secondDirectory, $firstDirectory)) {
         if (Test-Path -LiteralPath (Join-Path $directory 'uninstall.exe')) {
             try { Uninstall-Workbar $directory } catch { Write-Warning $_.Exception.Message }
