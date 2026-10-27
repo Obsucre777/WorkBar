@@ -34,8 +34,13 @@ https://github.com/user-attachments/assets/1e673ea5-3aaa-479c-bc71-75f23e90c5b1
   </a>
 </p>
 
-1. **安装并启动**：运行安装包，完成安装后打开 WorkBar。
-2. **接入 AI**：在支持本地 MCP 的 AI 客户端中添加服务，将启动命令设为安装目录中 `workbar-mcp.exe` 的完整路径。
+1. **安装并启动**：运行安装包，完成安装后打开 WorkBar。安装器会自动将 `workbar-mcp` 加入当前用户的 PATH。
+2. **接入 MCP**：重新打开终端和 AI 客户端，运行下方对应的接入命令。
 3. **安排第一项任务**：跟 AI 说：“帮我把写项目文档加入 WorkBar，预计 30 分钟。”任务会同步出现在桌面顶部。
 
-更多客户端配置示例见 [使用说明](scripts/portable/README-试用.txt)。
+| AI 客户端 | 接入命令 |
+| --- | --- |
+| Claude Code | `claude mcp add --transport stdio --scope user workbar -- workbar-mcp` |
+| Codex | `codex mcp add workbar -- workbar-mcp` |
+
+其它支持本地 MCP 的客户端，将服务启动命令设为 `workbar-mcp` 即可。更多配置示例见 [使用说明](scripts/portable/README-试用.txt)。
