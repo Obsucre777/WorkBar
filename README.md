@@ -57,5 +57,3 @@ https://github.com/user-attachments/assets/1e673ea5-3aaa-479c-bc71-75f23e90c5b1
    ```
 
 3. **安排第一项任务**：跟 AI 说：“帮我把写项目文档加入 WorkBar，预计 30 分钟。”任务会同步出现在桌面顶部。
-
-需要手动接入时，可参考 [使用说明](scripts/portable/README-试用.txt) 中的配置示例。
