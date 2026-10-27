@@ -26,7 +26,7 @@ https://github.com/user-attachments/assets/1e673ea5-3aaa-479c-bc71-75f23e90c5b1
 
 ## 快速开始
 
-当前支持 Windows x64。
+支持 Windows x64 · **安装包约 2 MB · 安装后约 6.4 MB（含 MCP）**
 
 <p>
   <a href="https://github.com/Obsucre777/WorkBar/releases/latest/download/WorkBar-setup-win64.exe">
