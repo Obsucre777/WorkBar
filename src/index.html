@@ -10,25 +10,25 @@
   <body>
     <div id="stage" class="stage">
       <!-- collapsed state: one thin progress line at the very top edge -->
-      <button id="slim" class="slim" type="button" title="展开 WorkBar" aria-label="展开 WorkBar">
+      <button id="slim" class="slim" type="button" title="展开 WorkBar" data-i18n-title="bar.expand" aria-label="展开 WorkBar" data-i18n-aria-label="bar.expand">
         <span id="slimBar" class="slim-bar"></span>
         <span id="slimLine" class="slim-line" hidden></span>
       </button>
 
       <section id="bar" class="bar" data-state="active" aria-label="WorkBar">
         <!-- every displayed task uses the same independent timer controls -->
-        <div id="taskViewport" class="task-viewport" role="group" aria-label="任务卡片">
+        <div id="taskViewport" class="task-viewport" role="group" aria-label="任务卡片" data-i18n-aria-label="bar.tasks">
           <div id="units" class="units"></div>
         </div>
 
         <div class="tail">
-          <button id="previousTasks" class="ghost task-nav" type="button" title="查看前一个任务" aria-label="查看前一个任务" aria-controls="units" hidden>
+          <button id="previousTasks" class="ghost task-nav" type="button" title="查看前一个任务" data-i18n-title="bar.previous" aria-label="查看前一个任务" data-i18n-aria-label="bar.previous" aria-controls="units" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6" /></svg>
           </button>
-          <button id="nextTasks" class="ghost task-nav" type="button" title="查看后一个任务" aria-label="查看后一个任务" aria-controls="units" hidden>
+          <button id="nextTasks" class="ghost task-nav" type="button" title="查看后一个任务" data-i18n-title="bar.next" aria-label="查看后一个任务" data-i18n-aria-label="bar.next" aria-controls="units" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6" /></svg>
           </button>
-          <button id="collapse" class="ghost" type="button" title="收起成一条线" aria-label="收起">
+          <button id="collapse" class="ghost" type="button" title="收起成一条线" data-i18n-title="bar.collapseTitle" aria-label="收起" data-i18n-aria-label="bar.collapse">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 14.5 12 8.5l6 6" /></svg>
           </button>
         </div>
@@ -36,6 +36,7 @@
       </section>
     </div>
 
+    <script src="i18n.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

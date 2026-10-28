@@ -397,6 +397,9 @@ body {
 
 .estimate {
   color: var(--dim);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status {

@@ -1,6 +1,7 @@
 //! Tray shortcut preferences. This module never reads or writes the task plan.
 
 use serde::{Deserialize, Serialize};
+use crate::language::{self, UiError};
 use std::{fs, io::Write, path::Path, sync::{atomic::{AtomicBool, Ordering}, Mutex}};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
@@ -13,7 +14,7 @@ pub struct ShortcutInfo {
     shortcut: String,
     default_shortcut: &'static str,
     registered: bool,
-    error: Option<String>,
+    error: Option<UiError>,
 }
 
 struct Current {
@@ -42,10 +43,10 @@ impl Default for SettingsState {
     }
 }
 
-fn parse(value: &str) -> Result<Shortcut, String> {
-    let key = value.trim().parse::<Shortcut>().map_err(|_| "请使用单个按键，或 Ctrl / Alt 组合键".to_string())?;
+fn parse(value: &str) -> Result<Shortcut, UiError> {
+    let key = value.trim().parse::<Shortcut>().map_err(|_| UiError::new("shortcut.invalid"))?;
     if key.mods.intersects(Modifiers::SUPER | Modifiers::META) || key.key == Code::F12 {
-        return Err("避开 Windows 键和 F12，其余单键或组合键都可以".into());
+        return Err(UiError::new("shortcut.reserved"));
     }
     Ok(key)
 }
@@ -63,17 +64,17 @@ fn display(key: Shortcut) -> String {
 #[derive(Serialize, Deserialize)]
 struct Preference { shortcut: String }
 
-fn read_preference(path: &Path) -> Result<String, String> {
+fn read_preference(path: &Path) -> Result<String, UiError> {
     match fs::read(path) {
-        Ok(body) => serde_json::from_slice::<Preference>(&body).map(|p| p.shortcut).map_err(|_| "快捷键配置无法读取，可重新设置后保存".into()),
+        Ok(body) => serde_json::from_slice::<Preference>(&body).map(|p| p.shortcut).map_err(|_| UiError::new("shortcut.invalidConfig")),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(DEFAULT_SHORTCUT.into()),
-        Err(error) => Err(format!("读取快捷键配置失败：{error}")),
+        Err(error) => Err(UiError::detail("shortcut.readError", error)),
     }
 }
 
-fn write_preference(path: &Path, shortcut: &str) -> Result<(), String> {
-    let parent = path.parent().ok_or("快捷键配置路径无效")?;
-    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+fn write_preference(path: &Path, shortcut: &str) -> Result<(), UiError> {
+    let parent = path.parent().ok_or_else(|| UiError::new("shortcut.invalidPath"))?;
+    fs::create_dir_all(parent).map_err(|e| UiError::detail("shortcut.saveError", e))?;
     let temporary = parent.join(format!(".shortcut-{}-{}.tmp", std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
     let result = (|| {
@@ -84,7 +85,7 @@ fn write_preference(path: &Path, shortcut: &str) -> Result<(), String> {
         fs::rename(&temporary, path)
     })();
     if result.is_err() { let _ = fs::remove_file(&temporary); }
-    result.map_err(|e: std::io::Error| format!("保存快捷键失败：{e}"))
+    result.map_err(|e: std::io::Error| UiError::detail("shortcut.saveError", e))
 }
 
 fn preference_path() -> std::path::PathBuf { workbar_core::data_dir().join("shortcut.json") }
@@ -93,12 +94,12 @@ pub fn initialize(app: &AppHandle) {
     let loaded = read_preference(&preference_path());
     let mut error = loaded.as_ref().err().cloned();
     let key = loaded.as_ref().ok().and_then(|value| parse(value).ok()).unwrap_or_else(|| {
-        if loaded.is_ok() { error = Some("已保存的快捷键无效，请重新设置".into()); }
+        if loaded.is_ok() { error = Some(UiError::new("shortcut.invalidSaved")); }
         parse(DEFAULT_SHORTCUT).expect("default shortcut is valid")
     });
     let registered = app.global_shortcut().register(key).map_err(|e| {
         eprintln!("[workbar] shortcut registration failed: {e}");
-        error = Some("快捷键未生效，可能已被占用；可从托盘重新设置".into());
+        error = Some(UiError::new("shortcut.unregistered"));
     }).is_ok();
     let state = app.state::<SettingsState>();
     let mut current = state.current.lock().unwrap();
@@ -112,12 +113,12 @@ pub fn attach_menu(app: &AppHandle, item: tauri::menu::MenuItem<tauri::Wry>) {
     update_menu(app);
 }
 
-fn update_menu(app: &AppHandle) {
+pub fn update_menu(app: &AppHandle) {
     let state = app.state::<SettingsState>();
     let shortcut = state.current.lock().unwrap().info.shortcut.clone();
     let item = state.menu.lock().unwrap().clone();
     if let Some(item) = item {
-        let _ = item.set_text(format!("收起 / 展开  ({shortcut})"));
+        let _ = item.set_text(format!("{}  ({shortcut})", language::text(app, "tray.toggle")));
     }
 }
 
@@ -141,16 +142,16 @@ pub fn get_shortcut(app: AppHandle) -> ShortcutInfo {
 }
 
 #[tauri::command]
-pub fn save_shortcut(app: AppHandle, shortcut: String) -> Result<ShortcutInfo, String> {
+pub fn save_shortcut(app: AppHandle, shortcut: String) -> Result<ShortcutInfo, UiError> {
     let candidate = parse(&shortcut)?;
     let state = app.state::<SettingsState>();
-    let _operation = state.operation.lock().map_err(|_| "快捷键设置正忙")?;
+    let _operation = state.operation.lock().map_err(|_| UiError::new("shortcut.busy"))?;
     let previous = state.current.lock().unwrap().active;
     let already_registered = app.global_shortcut().is_registered(candidate);
     if !already_registered {
         app.global_shortcut().register(candidate).map_err(|e| {
             eprintln!("[workbar] shortcut registration failed: {e}");
-            "该组合已被占用或不可用，原快捷键保持不变".to_string()
+            UiError::new("shortcut.unavailable")
         })?;
     }
     let value = display(candidate);
@@ -158,7 +159,7 @@ pub fn save_shortcut(app: AppHandle, shortcut: String) -> Result<ShortcutInfo, S
         if !already_registered {
             if let Err(cleanup) = app.global_shortcut().unregister(candidate) {
                 eprintln!("[workbar] shortcut rollback failed: {cleanup}");
-                return Err(format!("{error}。原快捷键仍有效；新组合释放失败，请重启 WorkBar。"));
+                return Err(UiError::detail("shortcut.rollbackError", cleanup));
             }
         }
         return Err(error);
@@ -166,7 +167,7 @@ pub fn save_shortcut(app: AppHandle, shortcut: String) -> Result<ShortcutInfo, S
     let error = previous.filter(|key| *key != candidate).and_then(|key| {
         app.global_shortcut().unregister(key).err().map(|error| {
             eprintln!("[workbar] old shortcut release failed: {error}");
-            "新快捷键已保存，旧组合释放失败，请重启 WorkBar".into()
+            UiError::new("shortcut.releaseError")
         })
     });
     let info = ShortcutInfo { shortcut: value, default_shortcut: DEFAULT_SHORTCUT, registered: true, error };
@@ -180,20 +181,20 @@ pub fn save_shortcut(app: AppHandle, shortcut: String) -> Result<ShortcutInfo, S
 }
 
 #[tauri::command]
-pub fn set_shortcut_recording(window: WebviewWindow, recording: bool) -> Result<(), String> {
-    if window.label() != LABEL { return Err("请在快捷键设置窗口录入".into()); }
+pub fn set_shortcut_recording(window: WebviewWindow, recording: bool) -> Result<(), UiError> {
+    if window.label() != LABEL { return Err(UiError::new("shortcut.recordWindow")); }
     if recording && (!window.is_visible().unwrap_or(false) || !window.is_focused().unwrap_or(false)) {
-        return Err("请先切换到快捷键设置窗口".into());
+        return Err(UiError::new("shortcut.focusWindow"));
     }
     window.state::<SettingsState>().recording.store(recording, Ordering::SeqCst);
     Ok(())
 }
 
 #[tauri::command]
-pub fn close_shortcut_settings(window: WebviewWindow) -> Result<(), String> {
-    if window.label() != LABEL { return Err("窗口不匹配".into()); }
+pub fn close_shortcut_settings(window: WebviewWindow) -> Result<(), UiError> {
+    if window.label() != LABEL { return Err(UiError::new("shortcut.wrongWindow")); }
     window.state::<SettingsState>().recording.store(false, Ordering::SeqCst);
-    window.hide().map_err(|e| e.to_string())
+    window.hide().map_err(|e| UiError::detail("shortcut.closeError", e))
 }
 
 pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
@@ -217,7 +218,7 @@ pub fn open(app: &AppHandle) {
                 return Ok(());
             }
             let mut builder = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("shortcut-settings.html".into()))
-                .title("WorkBar · 快捷键").inner_size(440.0, 320.0).center().resizable(false)
+                .title(language::text(&app, "settings.windowTitle")).inner_size(440.0, 320.0).center().resizable(false)
                 .maximizable(false).minimizable(false).decorations(false).shadow(false).transparent(true)
                 .background_color(tauri::utils::config::Color(0, 0, 0, 0)).always_on_top(true).visible(false);
             if let Some(main) = app.config().app.windows.iter().find(|window| window.label == "main") {

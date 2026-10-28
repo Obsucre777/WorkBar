@@ -6,6 +6,8 @@
   const invoke = TAURI && TAURI.core ? TAURI.core.invoke : null;
   const listen = TAURI && TAURI.event ? TAURI.event.listen : null;
 
+  const { t } = window.WorkbarI18n;
+
   const RING_LEN = 2 * Math.PI * 18;
   const MAX_VISIBLE_TASKS = 4;
   const TASK_COLOR_COUNT = 4;
@@ -28,6 +30,7 @@
   };
 
   let plan = { date: "", tasks: [] };
+  let barError = null;
   let lastSnapshot = "";
   let slimSignature = "";
   let unitNodes = [];
@@ -87,25 +90,25 @@
     if (m >= 60) {
       const h = Math.floor(m / 60);
       const rest = m % 60;
-      return rest ? `${h}小时${rest}分` : `${h}小时`;
+      return rest ? t("time.hoursMinutes", { hours: h, minutes: rest }) : t("time.hours", { count: h });
     }
-    return `${m}分钟`;
+    return t("time.minutes", { count: m });
   }
 
   function taskWindowLabel(task) {
     if (task.start && task.end) return `${task.start}–${task.end}`;
-    if (task.start) return `${task.start} 开始`;
-    if (task.end) return `${task.end} 前`;
+    if (task.start) return t("bar.startsAt", { time: task.start });
+    if (task.end) return t("bar.endsBy", { time: task.end });
     return "";
   }
 
   /** Friendly "starts soon" hint: coarser buckets as the start gets closer. */
   function startHint(remainMin) {
-    if (remainMin < 5) return "不到 5 分钟";
-    if (remainMin < 10) return "不到 10 分钟";
-    if (remainMin < 15) return "不到 15 分钟";
-    if (remainMin < 30) return "不到 30 分钟";
-    if (remainMin < 60) return "不到 1 小时";
+    if (remainMin < 5) return t("bar.soonMinutes", { count: 5 });
+    if (remainMin < 10) return t("bar.soonMinutes", { count: 10 });
+    if (remainMin < 15) return t("bar.soonMinutes", { count: 15 });
+    if (remainMin < 30) return t("bar.soonMinutes", { count: 30 });
+    if (remainMin < 60) return t("bar.soonHour");
     return "";
   }
 
@@ -181,7 +184,7 @@
     const root = document.createElement("div");
     root.className = "unit";
     root.innerHTML = [
-      '<button class="ring" type="button" title="暂停 / 继续计时" aria-label="暂停或继续计时">',
+      '<button class="ring" type="button">',
       '  <svg class="ring-svg" viewBox="0 0 44 44" aria-hidden="true">',
       '    <circle class="ring-track" cx="22" cy="22" r="18"></circle>',
       '    <circle class="ring-fill" cx="22" cy="22" r="18"></circle>',
@@ -195,7 +198,7 @@
       '  <div class="now-head"><h1 class="title"></h1><span class="pulse" aria-hidden="true"></span></div>',
       '  <div class="now-sub"><span class="elapsed">--:--</span><span class="slash">/</span><span class="estimate">--</span><span class="status"></span></div>',
       "</div>",
-      '<button class="done" type="button" title="完成这一项" aria-label="完成">',
+      '<button class="done" type="button">',
       '  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.8 12.6 9.6 17.4 19.2 6.9"></path></svg>',
       "</button>",
     ].join("");
@@ -479,10 +482,10 @@
     if (!task) {
       const complete = view.state === "complete";
       return {
-        title: complete ? "今天的工作都完成了" : "今天还没有计划",
+        title: complete ? t("bar.complete") : t("bar.empty"),
         elapsed: "",
-        estimate: complete ? `完成 ${view.doneCount} 项` : "用AI排一下计划吧",
-        status: complete ? "休息一下" : "",
+        estimate: complete ? t("bar.completedCount", { count: view.doneCount }) : t("bar.planHint"),
+        status: complete ? t("bar.rest") : "",
         statusClass: "",
         overdue: false,
         progress: complete ? 1 : 0,
@@ -518,9 +521,9 @@
         }
       }
       return {
-        title: task.title || "未命名任务",
+        title: task.title || t("bar.untitled"),
         elapsed: "",
-        estimate: startMin === null ? "待开始" : `${task.start} 开始`,
+        estimate: startMin === null ? t("bar.pending") : t("bar.startsAt", { time: task.start }),
         status,
         statusClass,
         overdue: false,
@@ -535,7 +538,7 @@
     const isOverdue = !up && mode === "running" && overdue > 0;
     // already timed (running or paused): elapsed / estimate, nothing else
     return {
-      title: task.title || "未命名任务",
+      title: task.title || t("bar.untitled"),
       elapsed: formatClock(spent),
       estimate: up ? "" : formatEstimate(task.est_min),
       status: "",
@@ -592,6 +595,12 @@
         refs.ring.dataset.mode = target.mode;
       }
       refs.pulse.classList.toggle("on", target.pulse);
+      refs.ring.title = t("bar.timerTitle");
+      refs.ring.setAttribute("aria-label", t("bar.timerLabel"));
+      refs.done.title = t("bar.doneTitle");
+      refs.done.setAttribute("aria-label", t("bar.done"));
+      refs.estimate.title = target.estimate;
+      refs.status.title = target.status;
       refs.done.disabled = !task;
     });
     return list;
@@ -684,6 +693,11 @@
 
   // ----------------------------------------------------------- task actions
 
+  function showBarError(key, error) {
+    barError = { key, error: String(error) };
+    el.bar.title = t(key, { error: barError.error });
+  }
+
   function serialize() {
     return JSON.stringify(plan);
   }
@@ -713,11 +727,12 @@
         const operation = pendingActions[0];
         try {
           const fresh = await invoke("task_action", operation);
+          barError = null;
           el.bar.removeAttribute("title");
           if (pendingActions.length === 1) acceptPlan(fresh);
         } catch (err) {
           console.error("[workbar] task action failed", err);
-          el.bar.title = `任务修改未保存：${String(err)}。将恢复数据库中的任务状态。`;
+          showBarError("bar.saveError", err);
         }
         pendingActions.shift();
       }
@@ -845,7 +860,7 @@
       } catch (err) {
         console.warn("[workbar] load failed", err);
         // Keep the last usable state; a read error is never an empty plan.
-        el.bar.title = `暂时无法读取任务：${String(err)}。正在重试。`;
+        showBarError("bar.readError", err);
         return;
       }
     } else {
@@ -896,9 +911,9 @@
     return {
       date: todayString(),
       tasks: [
-        { id: "t1", title: "写周报", start: "09:30", end: "10:00", est_min: 30, spent_sec: 0 },
-        { id: "t2", title: "修登录 bug", start: "10:00", end: "11:00", est_min: 60, spent_sec: 0 },
-        { id: "t3", title: "回复邮件", start: "11:00", end: "11:30", est_min: 30, spent_sec: 0 },
+        { id: "t1", title: t("demo.report"), start: "09:30", end: "10:00", est_min: 30, spent_sec: 0 },
+        { id: "t2", title: t("demo.bug"), start: "10:00", end: "11:00", est_min: 60, spent_sec: 0 },
+        { id: "t3", title: t("demo.email"), start: "11:00", end: "11:30", est_min: 30, spent_sec: 0 },
       ],
     };
   }
@@ -993,6 +1008,11 @@
   }
 
   async function boot() {
+    await window.WorkbarI18n.ready;
+    window.addEventListener("workbar-language-changed", () => {
+      render(computeView(), true);
+      if (barError) el.bar.title = t(barError.key, { error: barError.error });
+    });
     wire();
     await loadPlan(true);
     setInterval(tick, 1000);

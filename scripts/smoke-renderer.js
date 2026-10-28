@@ -26,8 +26,12 @@ if (!browser) {
   process.exit(1);
 }
 
-function bootstrap() {
+function bootstrap(catalogs) {
   const listeners = new Map();
+  let language = window.parent.__fixtureLanguage || 'zh-CN';
+  const languageInfo = () => ({ preference: language, locale: language, messages: catalogs[language] });
+  let shortcut = { shortcut: 'Alt+W', default_shortcut: 'Alt+W', registered: true, error: null };
+  const savedShortcuts = [];
   const RealDate = Date;
   const clock = window.parent.__fixtureClock || [12, 0, 0];
   let now = new RealDate().setHours(...clock, 0);
@@ -193,6 +197,9 @@ function bootstrap() {
     }
   }
   window.__smoke = {
+    async setLanguage(locale) { language = locale; await emit('language-changed', languageInfo()); },
+    savedShortcuts: () => savedShortcuts.slice(),
+    async setShortcutError(error) { shortcut.error = error; await emit('shortcut-settings-opened'); },
     getPlan: () => readBackend(),
     actionRequests: () => clone(actionRequests),
     failNextRead: () => { failRead = true; },
@@ -230,6 +237,10 @@ function bootstrap() {
   window.__TAURI__ = {
     core: {
       async invoke(command, args) {
+        if (command === 'get_language') return languageInfo();
+        if (command === 'get_shortcut') return clone(shortcut);
+        if (command === 'save_shortcut') { savedShortcuts.push(args.shortcut); shortcut.shortcut = args.shortcut; return clone(shortcut); }
+        if (command === 'set_shortcut_recording' || command === 'close_shortcut_settings') return;
         if (command === 'get_plan') {
           if (failRead) { failRead = false; throw new Error('Simulated database read error'); }
           if (holdRead) {
@@ -1223,6 +1234,83 @@ async function runInBrowser() {
     const reducedB = view.unit('b');
     view.unit('a').querySelector('.done').click();
     assert('reduced-motion mode preserves task nodes without animated overlays', view.unit('b') === reducedB && !view.doc.querySelector('.unit-exit') && view.doc.getAnimations().length === 0);
+
+    // Language changes must preserve task identity, timer values and actions.
+    view = await fixture('compact');
+    const beforeLanguage = view.win.__smoke.getPlan();
+    const originalCard = view.unit('a');
+    await view.win.__smoke.setLanguage('en');
+    assert('English sets document language and navigation labels', view.doc.documentElement.lang === 'en' && view.doc.getElementById('slim').title === 'Expand WorkBar');
+    assert('English timer estimates are localized', view.unit('a').querySelector('.estimate').textContent === '10 min' && view.unit('b').querySelector('.estimate').textContent === '1 hr 30 min');
+    assert('English task controls are accessible', view.unit('a').querySelector('.ring').getAttribute('aria-label') === 'Pause or resume timer' && view.unit('a').querySelector('.done').title === 'Complete this task');
+    assert('language switch preserves task nodes and all task data', view.unit('a') === originalCard && JSON.stringify(view.win.__smoke.getPlan()) === JSON.stringify(beforeLanguage) && view.win.__smoke.actionRequests().length === 0);
+    assert('English timer row fits inside its card', [...view.doc.querySelectorAll('.now-sub')].every(node => node.scrollWidth <= node.clientWidth + 1));
+    await view.win.__smoke.setLanguage('zh-CN');
+    assert('switching back restores Chinese estimates and labels', view.unit('b').querySelector('.estimate').textContent === '1小时30分' && view.doc.getElementById('collapse').getAttribute('aria-label') === '收起');
+    const custom = view.win.__smoke.getPlan();
+    custom.tasks[0].title = '保留用户任务标题';
+    await view.win.__smoke.setPlan(custom);
+    await view.win.__smoke.setLanguage('en');
+    assert('user task titles are not translated', view.unit('a').querySelector('.title').textContent === '保留用户任务标题');
+    view.unit('a').querySelector('.ring').click();
+    await settled();
+    assert('timer actions continue working in English', view.unit('a').querySelector('.ring').dataset.mode === 'paused');
+    view.win.__smoke.failNextAction();
+    view.unit('a').querySelector('.ring').click();
+    await settled();
+    assert('task errors appear in English', view.doc.getElementById('bar').title.startsWith('Task change was not saved:'));
+    await view.win.__smoke.setLanguage('zh-CN');
+    assert('visible task errors retranslate with the interface', view.doc.getElementById('bar').title.startsWith('任务修改未保存：'));
+
+    view = await fixture('done-empty');
+    await view.win.__smoke.setLanguage('en');
+    assert('English empty state is localized', view.doc.querySelector('.title').textContent === 'No tasks for today' && view.doc.querySelector('.estimate').textContent === 'Ask AI to plan your day');
+    view = await fixture('done-complete');
+    await view.win.__smoke.setLanguage('en');
+    assert('English completion state is localized', view.doc.querySelector('.title').textContent === 'All done for today' && view.doc.querySelector('.estimate').textContent === '1 completed');
+    view = await fixture('independent-idle');
+    await view.win.__smoke.setLanguage('en');
+    assert('English pending state is localized', view.unit('a').querySelector('.estimate').textContent === 'Not started');
+    const upcoming = view.win.__smoke.getPlan();
+    upcoming.tasks[0].start = '12:04';
+    await view.win.__smoke.setPlan(upcoming);
+    assert('English schedule and starts-soon hint are localized', view.unit('a').querySelector('.estimate').textContent === 'Starts 12:04' && view.unit('a').querySelector('.status').textContent === 'In < 5 min');
+    assert('English starts-soon row does not overflow', view.unit('a').querySelector('.now-sub').scrollWidth <= view.unit('a').querySelector('.now-sub').clientWidth + 1);
+
+    // Load settings directly in English, then change language with an unsaved draft.
+    frame.remove();
+    window.__fixtureLanguage = 'en';
+    frame = document.createElement('iframe');
+    frame.style.cssText = 'width:440px;height:320px;border:0';
+    const settingsLoaded = new Promise(resolve => { frame.onload = resolve; });
+    frame.src = '/settings';
+    document.body.append(frame);
+    await settingsLoaded;
+    const settingsWin = frame.contentWindow;
+    const settingsDoc = settingsWin.document;
+    const control = id => settingsDoc.getElementById(id);
+    assert('settings open fully in English', settingsDoc.title === 'WorkBar · Shortcut' && control('title').textContent === 'Set shortcut' && control('save').textContent === 'Save' && !control('recorder').disabled);
+    assert('English settings fit the window', settingsDoc.querySelector('.settings').scrollHeight <= settingsDoc.querySelector('.settings').clientHeight + 2);
+    control('recorder').click();
+    await settled();
+    settingsDoc.dispatchEvent(new settingsWin.KeyboardEvent('keydown', { key: 'F12', code: 'F12', bubbles: true }));
+    assert('shortcut validation appears in English', control('status').textContent === 'F12 is reserved by the system. Choose another shortcut.');
+    await settingsWin.__smoke.setLanguage('zh-CN');
+    assert('active recording and validation retranslate without resetting', control('status').textContent === 'F12 为系统保留按键，请换一个组合。' && control('recordingText').textContent === '请按下新快捷键…' && control('recorder').getAttribute('aria-pressed') === 'true');
+    settingsDoc.dispatchEvent(new settingsWin.KeyboardEvent('keydown', { key: 'j', code: 'KeyJ', ctrlKey: true, bubbles: true }));
+    await settled();
+    await settingsWin.__smoke.setLanguage('en');
+    assert('language change keeps the unsaved shortcut and translated status', control('keys').textContent === 'CtrlJ' && !control('save').disabled && control('status').textContent === 'Recorded. Click Save to apply.');
+    control('save').click();
+    await settled();
+    assert('shortcut can be saved after switching languages', settingsWin.__smoke.savedShortcuts().join() === 'Ctrl+J');
+    await settingsWin.__smoke.setLanguage('zh-CN');
+    assert('settings restore Chinese title and buttons', settingsDoc.title === 'WorkBar · 快捷键' && control('save').textContent === '保存');
+    await settingsWin.__smoke.setShortcutError({ key: 'shortcut.unregistered', detail: null });
+    assert('native shortcut errors appear in Chinese', control('status').textContent === '快捷键未生效，可能已被占用；可从托盘重新设置');
+    await settingsWin.__smoke.setLanguage('en');
+    assert('native shortcut errors retranslate without reopening settings', control('status').textContent.startsWith('The shortcut could not be enabled.'));
+    window.__fixtureLanguage = null;
   } catch (error) {
     checks.push({ name: error.stack || String(error), ok: false });
   }
@@ -1251,10 +1339,14 @@ async function main() {
     const routes = {
       '/': ['text/html', '<!doctype html><html><head><title>Workbar renderer regression</title></head><body><script src="/runner.js"></script></body></html>'],
       '/runner.js': ['application/javascript', `(${runInBrowser.toString()})();`],
-      '/bootstrap.js': ['application/javascript', `(${bootstrap.toString()})();`],
-      '/fixture': ['text/html', fs.readFileSync(path.join(source, 'index.html'), 'utf8').replace('<script src="app.js">', '<script src="/bootstrap.js"></script><script src="app.js">')],
+      '/bootstrap.js': ['application/javascript', `(${bootstrap.toString()})(${JSON.stringify(Object.fromEntries(['en', 'zh-CN'].map(locale => [locale, JSON.parse(fs.readFileSync(path.join(source, 'locales', `${locale}.json`), 'utf8'))])))});`],
+      '/fixture': ['text/html', fs.readFileSync(path.join(source, 'index.html'), 'utf8').replace('<script src="i18n.js">', '<script src="/bootstrap.js"></script><script src="i18n.js">')],
       '/app.js': ['application/javascript', fs.readFileSync(path.join(source, 'app.js'))],
       '/styles.css': ['text/css', fs.readFileSync(path.join(source, 'styles.css'))],
+      '/i18n.js': ['application/javascript', fs.readFileSync(path.join(source, 'i18n.js'))],
+      '/settings': ['text/html', fs.readFileSync(path.join(source, 'shortcut-settings.html'), 'utf8').replace('<script src="i18n.js">', '<script src="/bootstrap.js"></script><script src="i18n.js">')],
+      '/shortcut-settings.js': ['application/javascript', fs.readFileSync(path.join(source, 'shortcut-settings.js'))],
+      '/shortcut-settings.css': ['text/css', fs.readFileSync(path.join(source, 'shortcut-settings.css'))],
     };
     const route = routes[url.pathname];
     response.writeHead(route ? 200 : 404, { 'Content-Type': route ? `${route[0]}; charset=utf-8` : 'text/plain' });

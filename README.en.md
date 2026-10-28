@@ -24,6 +24,7 @@ https://github.com/user-attachments/assets/1e673ea5-3aaa-479c-bc71-75f23e90c5b1
 
 - **Count-up timers**: Track the time you spend on each task without setting a duration in advance.
 - **Countdown timers**: Set an estimated duration and see the time remaining or when a task runs over.
+- **English and Chinese interfaces**: Follow your system language by default, or switch from the tray menu. Changes apply immediately and your choice is remembered.
 - **Let AI manage your tasks through MCP**: Once connected, your AI client can create, view, edit, reorder, and delete tasks, as well as start, pause, resume, or complete them. Manage your WorkBar tasks and timers through conversation.
 
 ## Quick Start
@@ -32,7 +33,7 @@ Windows x64 · **About 2 MB to download · About 6.4 MB installed (including MCP
 
 **[Download for Windows](https://github.com/Obsucre777/WorkBar/releases/latest/download/WorkBar-setup-win64.exe)**
 
-The app currently uses a Chinese interface. This page provides English documentation.
+The app supports English and Simplified Chinese. Chinese system languages use Simplified Chinese by default; other system languages use English. You can override this from the tray menu under **Language**.
 
 1. **Install and launch**: Run the installer, then open WorkBar. The installer automatically adds `workbar-mcp` to your user PATH.
 2. **Connect via MCP**: Send the following prompt to your AI client and let it set up the connection. Once setup is complete, start a new conversation to use WorkBar.
@@ -86,17 +87,16 @@ The app currently uses a Chinese interface. This page provides English documenta
 
 ## Common Actions
 
-The Chinese labels below help you find the corresponding menu items in the current interface.
-
 | Action | How |
 | --- | --- |
 | Pause / resume a timer | Click the task's timer ring. |
 | Complete a task | Click the ✓ button beside the task. |
 | Browse more tasks | Click the left or right arrow. |
 | Collapse / expand | Press `Alt+W` (the default shortcut), or click the tray icon. When collapsed, click the thin line at the top of the screen to expand. |
-| Change the shortcut | Right-click the tray icon → “设置快捷键” (Set shortcut). |
-| Launch at startup | Right-click the tray icon → “开机自启” (Launch at startup). |
-| Quit | Right-click the tray icon → “退出 WorkBar” (Quit WorkBar). |
+| Change the shortcut | Right-click the tray icon → “Set shortcut…”. |
+| Change the language | Right-click the tray icon → “Language” → “Follow system”, “简体中文”, or “English”. |
+| Launch at startup | Right-click the tray icon → “Launch at startup”. |
+| Quit | Right-click the tray icon → “Quit WorkBar”. |
 
 ## Feedback and License
 

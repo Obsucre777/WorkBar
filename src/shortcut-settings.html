@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
-    <title>WorkBar · 快捷键</title>
+    <title data-i18n="settings.windowTitle">WorkBar · 快捷键</title>
     <link rel="stylesheet" href="shortcut-settings.css" />
   </head>
   <body>
@@ -12,25 +12,26 @@
       <header data-tauri-drag-region>
         <div data-tauri-drag-region>
           <span class="brand" data-tauri-drag-region>WORKBAR</span>
-          <h1 id="title" data-tauri-drag-region>设置快捷键</h1>
+          <h1 id="title" data-tauri-drag-region data-i18n="settings.title">设置快捷键</h1>
         </div>
-        <button id="close" class="close" type="button" aria-label="关闭设置">×</button>
+        <button id="close" class="close" type="button" aria-label="关闭设置" data-i18n-aria-label="settings.close">×</button>
       </header>
-      <label id="action">收起 / 展开 WorkBar</label>
+      <label id="action" data-i18n="settings.action">收起 / 展开 WorkBar</label>
       <button id="recorder" class="recorder" type="button" aria-labelledby="action" aria-describedby="hint" aria-pressed="false" disabled>
         <span id="keys" class="keys"></span>
         <span id="recordingText"></span>
       </button>
-      <p id="hint" class="hint">点击按键区域，直接按下新的快捷键（单键也可以）</p>
-      <p id="status" class="status" role="status" aria-live="polite">正在读取…</p>
+      <p id="hint" class="hint" data-i18n="settings.hint">点击按键区域，直接按下新的快捷键（单键也可以）</p>
+      <p id="status" class="status" role="status" aria-live="polite" data-i18n="settings.loading">正在读取…</p>
       <footer>
-        <button id="restore" class="restore" type="button" disabled>恢复默认</button>
+        <button id="restore" class="restore" type="button" disabled data-i18n="settings.restore">恢复默认</button>
         <div class="actions">
-          <button id="cancel" class="secondary" type="button">取消</button>
-          <button id="save" class="primary" type="button" disabled>保存</button>
+          <button id="cancel" class="secondary" type="button" data-i18n="settings.cancel">取消</button>
+          <button id="save" class="primary" type="button" disabled data-i18n="settings.save">保存</button>
         </div>
       </footer>
     </section>
+    <script src="i18n.js"></script>
     <script src="shortcut-settings.js"></script>
   </body>
 </html>

@@ -7,12 +7,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod shortcut_settings;
+mod language;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, TryLockError};
 use std::time::Duration;
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent,
 };
@@ -731,18 +732,27 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let autostart_item = CheckMenuItem::with_id(
         app,
         "autostart",
-        "开机自启",
+        language::text(app.handle(), "tray.autostart"),
         true,
         autostart_enabled,
         None::<&str>,
     )?;
     let autostart_for_handler = autostart_item.clone();
 
-    let show_item = MenuItem::with_id(app, "show", format!("收起 / 展开  ({})", shortcut_settings::DEFAULT_SHORTCUT), true, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, "show", format!("{}  ({})", language::text(app.handle(), "tray.toggle"), shortcut_settings::DEFAULT_SHORTCUT), true, None::<&str>)?;
     shortcut_settings::attach_menu(app.handle(), show_item.clone());
-    let shortcut_item = MenuItem::with_id(app, "shortcut", "设置快捷键…", true, None::<&str>)?;
-    let data_item = MenuItem::with_id(app, "data", "打开数据目录", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", "退出 WorkBar", true, None::<&str>)?;
+    let shortcut_item = MenuItem::with_id(app, "shortcut", language::text(app.handle(), "tray.shortcut"), true, None::<&str>)?;
+    let data_item = MenuItem::with_id(app, "data", language::text(app.handle(), "tray.data"), true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", language::text(app.handle(), "tray.quit"), true, None::<&str>)?;
+
+    let system = CheckMenuItem::with_id(app, "language-system", language::text(app.handle(), "language.system"), true, false, None::<&str>)?;
+    let chinese = CheckMenuItem::with_id(app, "language-zh", "简体中文", true, false, None::<&str>)?;
+    let english = CheckMenuItem::with_id(app, "language-en", "English", true, false, None::<&str>)?;
+    let language_menu = Submenu::with_items(app, language::text(app.handle(), "tray.language"), true, &[&system, &chinese, &english])?;
+    language::attach_menu(app.handle(), language::TrayLabels {
+        shortcut: shortcut_item.clone(), autostart: autostart_item.clone(), data: data_item.clone(), quit: quit_item.clone(),
+        language: language_menu.clone(), system, chinese, english,
+    });
 
     let menu = Menu::with_items(
         app,
@@ -750,6 +760,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
             &show_item,
             &shortcut_item,
             &autostart_item,
+            &language_menu,
             &data_item,
             &PredefinedMenuItem::separator(app)?,
             &quit_item,
@@ -763,6 +774,9 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "show" => toggle_bar(app),
             "shortcut" => shortcut_settings::open(app),
+            "language-system" => language::select(app, language::Preference::System),
+            "language-zh" => language::select(app, language::Preference::Chinese),
+            "language-en" => language::select(app, language::Preference::English),
             "data" => {
                 let _ = open_data_dir();
             }
@@ -821,6 +835,7 @@ fn main() {
             content_width: AtomicU32::new(0),
             operation: Mutex::new(()),
         })
+        .manage(language::LanguageState::load())
         .manage(shortcut_settings::SettingsState::default())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -845,6 +860,7 @@ fn main() {
             open_data_dir,
             app_info,
             trace_js,
+            language::get_language,
             shortcut_settings::get_shortcut,
             shortcut_settings::save_shortcut,
             shortcut_settings::set_shortcut_recording,
