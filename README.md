@@ -14,6 +14,10 @@
   一款 AI 原生的轻量桌面任务工具，让任务进展尽在掌握。
 </p>
 
+<p align="center">
+  简体中文 · <a href="README.en.md">English</a>
+</p>
+
 ## 使用演示
 
 https://github.com/user-attachments/assets/1e673ea5-3aaa-479c-bc71-75f23e90c5b1
