@@ -2,10 +2,12 @@
   <img src="build/app-icon.png" width="112" height="112" alt="WorkBar Logo" />
 </p>
 
-<h1 align="center">WorkBar</h1>
-
 <p align="center">
-  Small and simple. Stay focused on what matters now.
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/workbar-title-en-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/workbar-title-en-light.svg" />
+    <img src="docs/assets/workbar-title-en-light.svg" width="480" height="88" alt="WorkBar · Small and simple. Stay focused." />
+  </picture>
 </p>
 
 <p align="center">
