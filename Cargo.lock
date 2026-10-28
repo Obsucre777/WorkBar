@@ -4588,7 +4588,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "workbar"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -4602,7 +4602,7 @@ dependencies = [
 
 [[package]]
 name = "workbar-core"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -4612,7 +4612,7 @@ dependencies = [
 
 [[package]]
 name = "workbar-mcp"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "serde_json",
  "workbar-core",
